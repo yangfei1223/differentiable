@@ -6,7 +6,7 @@ data:
 texture:
   sh_order: 2
   base_resolution: 512
-  target_resolution: 4096
+  target_resolution: 2048
   init_dc_value: 0.5
 
 training:
@@ -19,7 +19,6 @@ training:
     - { epoch: 0, resolution: 512 }
     - { epoch: 300, resolution: 1024 }
     - { epoch: 700, resolution: 2048 }
-    - { epoch: 1100, resolution: 4096 }
 
 loss:
   lambda_l1: 1.0

@@ -142,14 +142,58 @@ class Trainer:
     # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
-    def train(self) -> None:
-        """主训练循环。"""
+    def train(
+        self,
+        output_dir: str = "output",
+        checkpoint_every: int = 200,
+        resume_from: str | None = None,
+    ) -> None:
+        """主训练循环。
+
+        Args:
+            output_dir: checkpoint 保存目录。
+            checkpoint_every: 每 N 个 epoch 保存一次 checkpoint。
+            resume_from: 断点续训的 checkpoint 路径 (.pt)。
+        """
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+
+        start_epoch = 0
+
+        # ---- 断点续训 ----
+        if resume_from is not None:
+            ckpt = torch.load(resume_from, map_location=self.device)
+            if isinstance(ckpt, dict) and "sh_texture" in ckpt:
+                state = ckpt
+                start_epoch = state.get("epoch", 0)
+                tex = state["sh_texture"].to(self.device)
+                self.sh_texture = nn.Parameter(tex)
+                self.optimizer = Adam([self.sh_texture], lr=self.config.training.lr)
+                self.scheduler = MultiStepLR(
+                    self.optimizer,
+                    milestones=self.config.training.lr_decay_epochs,
+                    gamma=self.config.training.lr_decay,
+                )
+                # 跳过已完成的 scheduler 步数
+                for _ in range(start_epoch):
+                    self.scheduler.step()
+                print(f"[Resume] 从 epoch {start_epoch} 继续, loss={state.get('loss', 'N/A')}")
+            else:
+                # 旧格式：仅纹理张量
+                self.sh_texture = nn.Parameter(ckpt.to(self.device))
+                print("[Resume] 加载纹理 (旧格式, epoch 未知)")
+
         num_epochs = self.config.training.num_epochs
         batch_size = self.config.training.batch_size
         seam_every = self.config.seam_padding.apply_every_n_epochs
         num_views = len(self.dataset)
 
-        for epoch in range(num_epochs):
+        # 确保渲染器与当前纹理分辨率匹配
+        tex_res = self.sh_texture.shape[1]
+        self.current_resolution = tex_res
+        self.renderer = self._create_renderer(tex_res)
+
+        for epoch in range(start_epoch, num_epochs):
             # ---- 检查分辨率调度 ----
             target_res = self._current_resolution(epoch)
             if target_res != self.current_resolution:
@@ -195,6 +239,17 @@ class Trainer:
             avg_loss = epoch_loss / len(indices) if indices else 0.0
             if (epoch + 1) % max(1, num_epochs // 10) == 0 or epoch == 0:
                 print(f"[Epoch {epoch+1}/{num_epochs}] loss={avg_loss:.6f} res={self.current_resolution}")
+
+            # ---- 周期性 checkpoint ----
+            if checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
+                ckpt_path = os.path.join(output_dir, f"sh_texture_epoch{epoch+1}.pt")
+                torch.save({
+                    "epoch": epoch + 1,
+                    "sh_texture": self.get_sh_texture(),
+                    "loss": avg_loss,
+                    "resolution": self.current_resolution,
+                }, ckpt_path)
+                print(f"  [Checkpoint] {ckpt_path}")
 
     # ------------------------------------------------------------------
     # Accessors

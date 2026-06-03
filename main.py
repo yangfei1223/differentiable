@@ -19,7 +19,9 @@ def parse_args():
                         choices=["train", "export", "video"],
                         help="运行模式: train, export 或 video")
     parser.add_argument("--checkpoint", type=str, default=None,
-                        help="导出模式下 SH 纹理检查点路径 (.pt)")
+                        help="导出/视频模式下 SH 纹理检查点路径 (.pt)")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="断点续训的 checkpoint 路径 (.pt)")
     return parser.parse_args()
 
 
@@ -45,13 +47,16 @@ def main():
 
         from src.trainer import Trainer
         trainer = Trainer(cfg)
-        trainer.train()
-
         output_dir = Path(cfg.export.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        trainer.train(
+            output_dir=str(output_dir),
+            checkpoint_every=200,
+            resume_from=args.resume,
+        )
         ckpt_path = output_dir / "sh_texture.pt"
         torch.save(trainer.get_sh_texture(), str(ckpt_path))
-        logger.info(f"检查点已保存: {ckpt_path}")
+        logger.info(f"最终检查点已保存: {ckpt_path}")
 
     elif args.mode == "export":
         if args.checkpoint is None:
