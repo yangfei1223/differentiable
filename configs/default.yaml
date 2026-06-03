@@ -1,5 +1,5 @@
 data:
-  mesh_path: "data/scene/lowpoly.obj"
+  mesh_path: "data/scene/lowpoly.glb"
   gt_dir: "data/gt"
   camera_path: "data/cameras.json"
 
