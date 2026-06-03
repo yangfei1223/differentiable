@@ -45,11 +45,13 @@ class Trainer:
 
         # ---- 3. 初始化 SH 纹理 ----
         self.sh_order = config.texture.sh_order
-        self.sh_texture = init_sh_texture(
+        _sh = init_sh_texture(
             config.texture.base_resolution,
             sh_order=self.sh_order,
             init_dc=config.texture.init_dc_value,
-        ).to(self.device)
+        )
+        # .to(device) 会破坏 leaf 状态, 需要重建 nn.Parameter
+        self.sh_texture = nn.Parameter(_sh.data.to(self.device))
 
         # ---- 4. 优化器与调度器 ----
         self.optimizer = Adam([self.sh_texture], lr=config.training.lr)

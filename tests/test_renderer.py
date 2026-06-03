@@ -68,7 +68,7 @@ def test_render_output_shape():
     )
     camera = _make_camera()
 
-    sh_texture = init_sh_texture(16, sh_order=2, init_dc=0.5).to("cuda")
+    sh_texture = torch.nn.Parameter(init_sh_texture(16, sh_order=2, init_dc=0.5).data.cuda())
     rgb, mask = renderer.render(sh_texture, camera)
 
     assert rgb.shape == (1, 64, 64, 3), f"rgb shape = {rgb.shape}"
@@ -85,7 +85,7 @@ def test_render_gradient_flows():
     )
     camera = _make_camera()
 
-    sh_texture = init_sh_texture(16, sh_order=2, init_dc=0.5).to("cuda")
+    sh_texture = torch.nn.Parameter(init_sh_texture(16, sh_order=2, init_dc=0.5).data.cuda())
     rgb, mask = renderer.render(sh_texture, camera)
 
     loss = rgb.sum()
