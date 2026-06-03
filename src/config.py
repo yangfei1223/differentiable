@@ -72,6 +72,17 @@ class ExportConfig:
 
 
 @dataclass
+class VideoConfig:
+    center: list[float] = field(default_factory=lambda: [0.3, 2.0, -0.5])
+    radius: float = 14.0
+    height: float = 10.0
+    num_frames: int = 120
+    fov_deg: float = 45.0
+    resolution: int = 1024
+    fps: int = 30
+
+
+@dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
     texture: TextureConfig = field(default_factory=TextureConfig)
@@ -79,6 +90,7 @@ class Config:
     loss: LossConfig = field(default_factory=LossConfig)
     seam_padding: SeamPaddingConfig = field(default_factory=SeamPaddingConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
 
 
 def _parse_resolution_schedule(raw: list) -> List[ResolutionStep]:
@@ -106,5 +118,7 @@ def load_config(path: str | Path) -> Config:
         cfg.seam_padding = SeamPaddingConfig(**raw["seam_padding"])
     if "export" in raw:
         cfg.export = ExportConfig(**raw["export"])
+    if "video" in raw:
+        cfg.video = VideoConfig(**raw["video"])
 
     return cfg

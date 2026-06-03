@@ -16,8 +16,8 @@ def parse_args():
     parser.add_argument("--config", type=str, default="configs/default.yaml",
                         help="配置文件路径")
     parser.add_argument("--mode", type=str, default="train",
-                        choices=["train", "export"],
-                        help="运行模式: train 或 export")
+                        choices=["train", "export", "video"],
+                        help="运行模式: train, export 或 video")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="导出模式下 SH 纹理检查点路径 (.pt)")
     return parser.parse_args()
@@ -76,6 +76,36 @@ def main():
                 sh_texture, str(output_dir / "sh_channels"), cfg.texture.sh_order
             )
             logger.info(f"SH 通道已导出 ({len(paths)} 张)")
+
+    elif args.mode == "video":
+        if args.checkpoint is None:
+            logger.error("视频模式需要 --checkpoint 参数")
+            sys.exit(1)
+
+        logger.info("可微烘焙管线 — 视频导出")
+        sh_texture = torch.load(args.checkpoint, map_location="cpu")
+
+        from src.mesh import load_mesh
+        from src.video import render_video
+
+        mesh = load_mesh(cfg.data.mesh_path)
+        video_cfg = cfg.video
+        video_path = str(Path(cfg.export.output_dir) / "orbit.mp4")
+
+        logger.info(f"  分辨率: {video_cfg.resolution}, 帧数: {video_cfg.num_frames}, FPS: {video_cfg.fps}")
+        render_video(
+            sh_texture=sh_texture,
+            mesh=mesh,
+            output_path=video_path,
+            center=video_cfg.center,
+            radius=video_cfg.radius,
+            height=video_cfg.height,
+            num_frames=video_cfg.num_frames,
+            fov_deg=video_cfg.fov_deg,
+            resolution=video_cfg.resolution,
+            fps=video_cfg.fps,
+        )
+        logger.info(f"视频已导出: {video_path}")
 
     logger.info("完成。")
 
