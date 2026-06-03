@@ -64,7 +64,9 @@ def main():
             sys.exit(1)
 
         logger.info("可微烘焙管线 — 导出模式")
-        sh_texture = torch.load(args.checkpoint, map_location="cpu")
+        sh_texture_raw = torch.load(args.checkpoint, map_location="cpu")
+        # 兼容新旧格式：新 checkpoint 是 dict，旧的是纯张量
+        sh_texture = sh_texture_raw["sh_texture"] if isinstance(sh_texture_raw, dict) and "sh_texture" in sh_texture_raw else sh_texture_raw
 
         output_dir = Path(cfg.export.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +90,8 @@ def main():
             sys.exit(1)
 
         logger.info("可微烘焙管线 — 视频导出")
-        sh_texture = torch.load(args.checkpoint, map_location="cpu")
+        sh_texture_raw = torch.load(args.checkpoint, map_location="cpu")
+        sh_texture = sh_texture_raw["sh_texture"] if isinstance(sh_texture_raw, dict) and "sh_texture" in sh_texture_raw else sh_texture_raw
 
         from src.mesh import load_mesh
         from src.video import render_video
