@@ -141,13 +141,14 @@ def render_video(
             rgb, mask = renderer.render(sh_param, cam)  # [1, H, W, 3]
 
         # [1, H, W, 3] → [H, W, 3] numpy uint8
-        frame = rgb[0].detach().cpu().clamp(0.0, 1.0).numpy()
+        # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，需垂直翻转为图像坐标 (原点左上)
+        frame = rgb[0].detach().cpu().flip(0).clamp(0.0, 1.0).numpy()
         frame = (frame * 255).astype(np.uint8)
         # RGB → BGR for OpenCV
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
         # 黑色背景 (mask 为 0 的区域)
-        mask_np = mask[0].detach().cpu().numpy()  # [H, W]
+        mask_np = mask[0].detach().cpu().flip(0).numpy()  # [H, W]，同样翻转
         bg = mask_np < 0.5  # [H, W]
         frame[bg] = 0  # broadcast to [H, W, 3]
 
