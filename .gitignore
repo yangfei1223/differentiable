@@ -1,0 +1,7 @@
+data/gt/
+data/scene/
+data/cameras.json
+output/
+__pycache__/
+*.pyc
+*.egg-info/
