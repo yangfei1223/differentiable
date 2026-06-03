@@ -142,7 +142,8 @@ def render_video(
 
         # [1, H, W, 3] → [H, W, 3] numpy uint8
         # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，需垂直翻转为图像坐标 (原点左上)
-        frame = rgb[0].detach().cpu().flip(0).clamp(0.0, 1.0).numpy()
+        # 渲染输出是线性空间, 需 gamma 校正到 sRGB
+        frame = rgb[0].detach().cpu().flip(0).clamp(0.0, 1.0).pow(1.0 / 2.2).numpy()
         frame = (frame * 255).astype(np.uint8)
         # RGB → BGR for OpenCV
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)

@@ -62,6 +62,9 @@ def export_diffuse_texture(
     # DC 颜色 = sh_coeff * _C0
     diffuse = dc_coeffs * _C0  # [1, H, W, 3]
 
+    # 线性空间 → sRGB gamma 校正
+    diffuse = diffuse.clamp(0, 1).pow(1.0 / 2.2)
+
     # Clamp 到 [0, 1] 并转 uint8
     uint8_img = _to_uint8(diffuse)  # [H, W, 3]
 

@@ -43,10 +43,10 @@ def test_export_diffuse_png():
             f"PNG 尺寸应为 ({resolution}, {resolution})，实际为 {img.size}"
         )
 
-        # 验证像素值接近 dc（DC = sh_dc * _C0 ≈ 0.5）
+        # 验证像素值接近 dc（DC = sh_dc * _C0, 然后 gamma 校正: val^(1/2.2)）
         arr = np.array(img, dtype=np.float32) / 255.0
-        expected = dc  # init_dc=0.5 → DC color = dc_val * _C0 * (1/_C0)... wait
-        # sh_tex[0,0,0,0] = dc / _C0, 所以 diffuse[0,0,0] = sh_tex[0,0,0,0] * _C0 = dc
+        # init_dc=0.5 → DC color = 0.5 → gamma: 0.5^(1/2.2) ≈ 0.7297
+        expected = dc ** (1.0 / 2.2)
         assert np.allclose(arr.mean(), expected, atol=0.02), (
             f"平均像素值应接近 {expected}，实际为 {arr.mean():.4f}"
         )

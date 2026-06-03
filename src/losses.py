@@ -177,9 +177,11 @@ class CombinedLoss(nn.Module):
         n_valid = mask.sum() * 3 + 1e-8
         l1 = abs_diff.sum() / n_valid
 
-        # --- SSIM: permute [B, H, W, 3] → [B, 3, H, W] ---
-        rendered_chw = rendered.permute(0, 3, 1, 2)
-        gt_chw = gt.permute(0, 3, 1, 2)
+        # --- SSIM: masked — 仅在模型区域计算 ---
+        rendered_masked = rendered * mask_f
+        gt_masked = gt * mask_f
+        rendered_chw = rendered_masked.permute(0, 3, 1, 2)
+        gt_chw = gt_masked.permute(0, 3, 1, 2)
         ssim = ssim_loss(rendered_chw, gt_chw)
 
         # --- TV ---

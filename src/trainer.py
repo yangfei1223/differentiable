@@ -220,8 +220,11 @@ class Trainer:
                 gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
                 gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)  # [1, H, W, 3]
 
+                # sRGB → linear: GT 图像是 sRGB 编码, 渲染输出是线性空间
+                gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+
                 # 计算损失
-                loss = self.criterion(rendered, gt_resized, mask, self.sh_texture)
+                loss = self.criterion(rendered, gt_linear, mask, self.sh_texture)
 
                 # 反向传播 & 更新
                 loss.backward()
