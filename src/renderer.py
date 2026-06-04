@@ -128,6 +128,9 @@ class DifferentiableRenderer:
         basis_exp = basis.unsqueeze(-1)  # [1, H, W, 9, 1]
         rgb = (sh_9x3 * basis_exp).sum(dim=-2)  # [1, H, W, 3]
 
+        # clamp 负值：SH 高阶系数可能产生负贡献，截断到 0
+        rgb = rgb.clamp(min=0.0)
+
         # ---- 9. 遮罩 ----
         mask = (rast[..., 3] > 0).float()  # [1, H, W]
 
