@@ -1,0 +1,44 @@
+data:
+  mesh_path: "data/scene/lowpoly.glb"
+  gt_dir: "data/gt"
+  camera_path: "data/cameras.json"
+
+texture:
+  sh_order: 0
+  base_resolution: 512
+  target_resolution: 2048
+  init_dc_value: 0.5
+
+training:
+  num_epochs: 1000
+  lr: 0.01
+  lr_decay: 0.5
+  lr_decay_epochs: [300, 600, 800]
+  batch_size: 4
+  resolution_schedule:
+    - { epoch: 0, resolution: 512 }
+    - { epoch: 200, resolution: 1024 }
+    - { epoch: 500, resolution: 2048 }
+
+loss:
+  lambda_l1: 1.0
+  lambda_ssim: 0.2
+  lambda_tv: 0.005
+
+seam_padding:
+  dilation_radius: 3
+  apply_every_n_epochs: 50
+
+export:
+  output_dir: "output"
+  format: "gltf"
+  sh_truncate_order: -1
+
+video:
+  center: [0.3, 2.0, -0.5]
+  radius: 14.0
+  height: 10.0
+  num_frames: 60
+  fov_deg: 45.0
+  resolution: 1024
+  fps: 30

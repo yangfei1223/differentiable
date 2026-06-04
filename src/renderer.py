@@ -115,18 +115,19 @@ class DifferentiableRenderer:
             texc,
             filter_mode="linear",
             boundary_mode="zero",
-        )  # [1, H, W, 27]
+        )  # [1, H, W, C]
 
         # ---- 8. SH 解码 ----
-        # reshape → [1, H, W, 9, 3]
-        sh_9x3 = tex.reshape(*tex.shape[:-1], 9, 3)
+        n_sh = tex.shape[-1] // 3  # SH 系数个数: 1(order0), 4(order1), 9(order2)
+        sh_order = int(n_sh ** 0.5) - 1
+        sh_nx3 = tex.reshape(*tex.shape[:-1], n_sh, 3)
 
-        # 评估 SH 基函数 → [1, H, W, 9]
-        basis = eval_sh_basis(view_dir, order=2)  # [1, H, W, 9]
+        # 评估 SH 基函数 → [1, H, W, n_sh]
+        basis = eval_sh_basis(view_dir, order=sh_order)
 
         # 加权求和 → [1, H, W, 3]
-        basis_exp = basis.unsqueeze(-1)  # [1, H, W, 9, 1]
-        rgb = (sh_9x3 * basis_exp).sum(dim=-2)  # [1, H, W, 3]
+        basis_exp = basis.unsqueeze(-1)  # [1, H, W, n_sh, 1]
+        rgb = (sh_nx3 * basis_exp).sum(dim=-2)  # [1, H, W, 3]
 
         # clamp 负值：SH 高阶系数可能产生负贡献，截断到 0
         rgb = rgb.clamp(min=0.0)
