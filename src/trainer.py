@@ -1,8 +1,11 @@
 """训练主循环 — Coarse-to-Fine 分辨率调度与 seam padding。"""
 from __future__ import annotations
 
+import os
 import random
 from typing import List
+
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -17,7 +20,7 @@ from src.mesh import load_mesh
 from src.renderer import DifferentiableRenderer
 from src.seam_padding import dilate_texture
 from src.sh import init_sh_texture
-
+from src.utils import vis, vis_pair
 
 class Trainer:
     """可微烘焙训练器。
@@ -76,6 +79,9 @@ class Trainer:
         # ---- 7. 当前分辨率 & 渲染器 ----
         self.current_resolution = self._current_resolution(0)
         self.renderer = self._create_renderer(self.current_resolution)
+
+        # ---- 8. 训练历史记录 ----
+        self.history: dict[str, list] = {"epoch": [], "loss": [], "psnr": []}
 
     # ------------------------------------------------------------------
     # Resolution helpers
@@ -155,7 +161,6 @@ class Trainer:
             checkpoint_every: 每 N 个 epoch 保存一次 checkpoint。
             resume_from: 断点续训的 checkpoint 路径 (.pt)。
         """
-        import os
         os.makedirs(output_dir, exist_ok=True)
 
         start_epoch = 0
@@ -214,6 +219,10 @@ class Trainer:
                 # 渲染
                 rendered, mask = self.renderer.render(self.sh_texture, camera)  # [1, H, W, 3], [1, H, W]
 
+                # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，垂直翻转到图像坐标 (原点左上)
+                rendered = rendered.flip(1)
+                mask = mask.flip(1)
+
                 # 将 GT resize 到渲染分辨率
                 gt_hw = gt.permute(0, 1, 2, 3)  # [1, 3, H_gt, W_gt]
                 H, W = rendered.shape[1], rendered.shape[2]
@@ -240,12 +249,40 @@ class Trainer:
                 self._apply_seam_padding()
 
             avg_loss = epoch_loss / len(indices) if indices else 0.0
+
+            # ---- 计算该 epoch 的 PSNR (用第一个视角, no_grad) ----
+            psnr_val = 0.0
+            with torch.no_grad():
+                _img, _cam = self.dataset[0]
+                _gt = torch.from_numpy(_img).unsqueeze(0).to(self.device)
+                _rendered, _mask = self.renderer.render(self.sh_texture, _cam)
+                _rendered = _rendered.flip(1)
+                _mask = _mask.flip(1)
+                _gt_hw = _gt.permute(0, 1, 2, 3)
+                H, W = _rendered.shape[1], _rendered.shape[2]
+                _gt_r = F.interpolate(_gt_hw, size=(H, W), mode="bilinear", align_corners=False)
+                _gt_r = _gt_r.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+                _gt_lin = _gt_r.clamp(0, 1).pow(2.2)
+                _mask_f = _mask.unsqueeze(-1).float()
+                n_valid = _mask.sum() * 3 + 1e-8
+                mse = ((_rendered - _gt_lin) * _mask_f).pow(2).sum() / n_valid
+                if mse > 0:
+                    psnr_val = 10.0 * torch.log10(1.0 / mse).item()
+
+            self.history["epoch"].append(epoch + 1)
+            self.history["loss"].append(avg_loss)
+            self.history["psnr"].append(psnr_val)
+
             if (epoch + 1) % max(1, num_epochs // 10) == 0 or epoch == 0:
-                print(f"[Epoch {epoch+1}/{num_epochs}] loss={avg_loss:.6f} res={self.current_resolution}")
+                print(f"[Epoch {epoch+1}/{num_epochs}] loss={avg_loss:.6f} psnr={psnr_val:.2f}dB res={self.current_resolution}")
 
             # ---- 周期性 checkpoint ----
             if checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
-                ckpt_path = os.path.join(output_dir, f"sh_texture_epoch{epoch+1}.pt")
+                ep_tag = f"epoch{epoch+1}"
+                ep_dir = os.path.join(output_dir, ep_tag)
+                os.makedirs(ep_dir, exist_ok=True)
+
+                ckpt_path = os.path.join(ep_dir, "sh_texture.pt")
                 torch.save({
                     "epoch": epoch + 1,
                     "sh_texture": self.get_sh_texture(),
@@ -253,6 +290,112 @@ class Trainer:
                     "resolution": self.current_resolution,
                 }, ckpt_path)
                 print(f"  [Checkpoint] {ckpt_path}")
+
+                # ---- 调试输出: compare / diffuse / video ----
+                try:
+                    self._export_debug(ep_dir, epoch=epoch)
+                except Exception as e:
+                    print(f"  [Debug export warning] {e}")
+
+    # ------------------------------------------------------------------
+    # Debug exports
+    # ------------------------------------------------------------------
+    def _export_debug(self, output_dir: str, epoch: int) -> None:
+        """在 checkpoint 时输出调试可视化。"""
+        import cv2
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from src.exporter import export_diffuse_texture
+        from src.video import render_video
+
+        tex = self.get_sh_texture()
+
+        # 0. Loss + PSNR 曲线
+        epochs = self.history["epoch"]
+        losses = self.history["loss"]
+        psnrs = self.history["psnr"]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        ax1.plot(epochs, losses, "b-", linewidth=1)
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Loss")
+        ax1.set_title("Training Loss")
+        ax1.grid(True, alpha=0.3)
+
+        ax2.plot(epochs, psnrs, "r-", linewidth=1)
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("PSNR (dB)")
+        ax2.set_title("PSNR")
+        ax2.grid(True, alpha=0.3)
+
+        fig.suptitle(f"Epoch {epoch+1}  |  Loss: {losses[-1]:.4f}  |  PSNR: {psnrs[-1]:.2f} dB", fontsize=12)
+        fig.tight_layout()
+        curve_path = os.path.join(output_dir, "curves.png")
+        fig.savefig(curve_path, dpi=100)
+        # 也保存一份到 output root，方便随时查看最新状态
+        fig.savefig(os.path.join(os.path.dirname(output_dir), "curves.png"), dpi=100)
+        plt.close(fig)
+
+        # 1. Diffuse 贴图
+        diffuse_path = os.path.join(output_dir, "diffuse.png")
+        export_diffuse_texture(tex, diffuse_path, self.sh_order)
+
+        # 2. GT vs Rendered 对比 (前 3 个视角)
+        for i in range(min(3, len(self.dataset))):
+            img_np, camera = self.dataset[i]
+            gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1,3,H,W]
+
+            with torch.no_grad():
+                rgb, mask = self.renderer.render(self.sh_texture, camera)
+
+            # 翻转 nvdiffrast OpenGL 坐标
+            rgb = rgb.flip(1)
+            mask = mask.flip(1)
+
+            # Rendered → sRGB uint8
+            render_np = rgb[0].clamp(0, 1).pow(1.0 / 2.2).cpu().numpy()
+            render_np = (render_np * 255).astype(np.uint8)
+            render_bgr = cv2.cvtColor(render_np, cv2.COLOR_RGB2BGR)
+            mask_np = mask[0].cpu().numpy()
+            render_bgr[mask_np < 0.5] = 0
+
+            # GT → uint8
+            gt_np = (img_np.transpose(1, 2, 0) * 255).astype(np.uint8)
+            gt_bgr = cv2.cvtColor(gt_np, cv2.COLOR_RGB2BGR)
+
+            # 拼接
+            h1, w1 = render_bgr.shape[:2]
+            h2, w2 = gt_bgr.shape[:2]
+            target_h = min(h1, h2)
+            r1 = cv2.resize(render_bgr, (w1 * target_h // h1, target_h))
+            g1 = cv2.resize(gt_bgr, (w2 * target_h // h2, target_h))
+            cv2.putText(g1, "GT", (8, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(r1, "Render", (8, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            canvas = np.concatenate([g1, r1], axis=1)
+            compare_path = os.path.join(output_dir, f"compare_{i:04d}.png")
+            cv2.imwrite(compare_path, canvas)
+
+        # 3. 视频
+        from src.mesh import load_mesh
+        mesh = load_mesh(self.config.data.mesh_path)
+        video_path = os.path.join(output_dir, "orbit.mp4")
+        cfg = self.config
+        render_video(
+            sh_texture=tex,
+            mesh=mesh,
+            output_path=video_path,
+            center=cfg.video.center,
+            radius=cfg.video.radius,
+            height=cfg.video.height,
+            num_frames=cfg.video.num_frames,
+            fov_deg=cfg.video.fov_deg,
+            resolution=cfg.video.resolution,
+            fps=cfg.video.fps,
+        )
+
+        print(f"  [Debug] diffuse + compare + video → {output_dir}")
 
     # ------------------------------------------------------------------
     # Accessors
