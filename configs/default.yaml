@@ -37,8 +37,8 @@ export:
 
 video:
   center: [0.3, 2.0, -0.5]
-  radius: 14.0
-  height: 10.0
+  radius: 10.0
+  height: 8.0
   num_frames: 120
   fov_deg: 45.0
   resolution: 1024

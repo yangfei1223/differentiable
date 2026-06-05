@@ -136,21 +136,21 @@ class PBRShadingModel(ShadingModel):
         base_color, roughness, metallic = decode_material(self.mat_texture)
 
         # base_color.png
-        bc = base_color[0].clamp(0, 1).pow(1.0 / 2.2).cpu().numpy()
+        bc = base_color[0].clamp(0, 1).pow(1.0 / 2.2).detach().cpu().numpy()
         bc = (bc * 255).astype(np.uint8)
         p = os.path.join(output_dir, "base_color.png")
         Image.fromarray(bc, "RGB").save(p)
         paths.append(p)
 
         # roughness.png
-        r = roughness[0].clamp(0, 1).cpu().numpy().repeat(3, axis=-1)
+        r = roughness[0].clamp(0, 1).detach().cpu().numpy().repeat(3, axis=-1)
         r = (r * 255).astype(np.uint8)
         p = os.path.join(output_dir, "roughness.png")
         Image.fromarray(r, "RGB").save(p)
         paths.append(p)
 
         # metallic.png
-        m = metallic[0].clamp(0, 1).cpu().numpy().repeat(3, axis=-1)
+        m = metallic[0].clamp(0, 1).detach().cpu().numpy().repeat(3, axis=-1)
         m = (m * 255).astype(np.uint8)
         p = os.path.join(output_dir, "metallic.png")
         Image.fromarray(m, "RGB").save(p)
@@ -159,7 +159,7 @@ class PBRShadingModel(ShadingModel):
         # env_map.png
         from src.shading.pbr.env_map import _decode_env_map
         env_decoded = _decode_env_map(self.env_map)
-        env_img = env_decoded[0].clamp(0, 1).cpu().numpy()
+        env_img = env_decoded[0].clamp(0, 1).detach().cpu().numpy()
         env_img = (env_img * 255).astype(np.uint8)
         p = os.path.join(output_dir, "env_map.png")
         Image.fromarray(env_img, "RGB").save(p)
