@@ -38,7 +38,7 @@ class Trainer:
 
         # ---- 1. 加载网格 ----
         mesh = load_mesh(config.data.mesh_path)
-        self.vertices, self.faces, self.uvs, self.uv_idx = mesh.to_torch()
+        self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx = mesh.to_torch()
 
         # ---- 2. 创建数据集 ----
         self.dataset = GTDataset(
@@ -108,6 +108,8 @@ class Trainer:
             faces=self.faces,
             uvs=self.uvs,
             uv_idx=self.uv_idx,
+            normals=self.normals,
+            normal_idx=self.normal_idx,
             resolution=resolution,
             device=self.device,
         )

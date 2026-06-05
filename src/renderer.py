@@ -34,6 +34,8 @@ class DifferentiableRenderer:
         faces: torch.Tensor,
         uvs: torch.Tensor,
         uv_idx: torch.Tensor,
+        normals: torch.Tensor = None,
+        normal_idx: torch.Tensor = None,
         resolution: int = 512,
         device: str = "cuda",
     ):
@@ -55,6 +57,15 @@ class DifferentiableRenderer:
 
         # uv_idx: [F, 3] int32
         self.uv_idx = uv_idx.to(device).int()
+
+        if normals is not None:
+            self.normals = normals.to(device).float()
+        else:
+            self.normals = None
+        if normal_idx is not None:
+            self.normal_idx = normal_idx.to(device).int()
+        else:
+            self.normal_idx = None
 
         # nvdiffrast GL 上下文
         self.glctx = dr.RasterizeGLContext()

@@ -25,6 +25,8 @@ class MeshData:
     faces: np.ndarray
     uvs: np.ndarray
     uv_idx: np.ndarray
+    normals: np.ndarray = None           # 顶点法线 [N, 3]
+    normal_idx: np.ndarray = None        # 面-法线索引 [M, 3]
 
     # ------------------------------------------------------------------
     # Properties
@@ -71,17 +73,23 @@ class MeshData:
 
     def to_torch(
         self,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """将网格数据转换为 PyTorch 张量。
 
         Returns:
-            (vertices, faces, uvs, uv_idx) — 分别为 float32 / int64 张量。
+            (vertices, faces, uvs, uv_idx, normals, normal_idx)
         """
         v = torch.from_numpy(self.vertices.astype(np.float32))
         f = torch.from_numpy(self.faces.astype(np.int64))
         uv = torch.from_numpy(self.uvs.astype(np.float32))
         uvi = torch.from_numpy(self.uv_idx.astype(np.int64))
-        return v, f, uv, uvi
+        if self.normals is not None:
+            n = torch.from_numpy(self.normals.astype(np.float32))
+            ni = torch.from_numpy(self.normal_idx.astype(np.int64))
+        else:
+            n = torch.zeros_like(v)
+            ni = torch.zeros_like(f)
+        return v, f, uv, uvi, n, ni
 
 
 def load_mesh(path: str | Path) -> MeshData:
@@ -123,4 +131,18 @@ def load_mesh(path: str | Path) -> MeshData:
         uvs = np.zeros((0, 2), dtype=np.float64)
         uv_idx = np.zeros_like(faces, dtype=np.int64)
 
-    return MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx)
+    # 提取顶点法线
+    if hasattr(mesh_obj, 'vertex_normals'):
+        normals = np.array(mesh_obj.vertex_normals, dtype=np.float64)
+    else:
+        normals = None
+
+    normal_idx = np.array(mesh_obj.faces, dtype=np.int64)
+
+    if normals is None:
+        temp = MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx,
+                        normals=np.zeros_like(vertices), normal_idx=normal_idx)
+        normals = temp.compute_vertex_normals()
+
+    return MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx,
+                    normals=normals, normal_idx=normal_idx)

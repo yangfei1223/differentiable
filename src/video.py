@@ -165,12 +165,14 @@ def render_video(
     )
 
     # ---- 3. 创建渲染器 ----
-    verts, faces, uvs, uv_idx = mesh.to_torch()
+    verts, faces, uvs, uv_idx, normals, normal_idx = mesh.to_torch()
     renderer = DifferentiableRenderer(
         vertices=verts,
         faces=faces,
         uvs=uvs,
         uv_idx=uv_idx,
+        normals=normals,
+        normal_idx=normal_idx,
         resolution=resolution,
         device=device,
     )
