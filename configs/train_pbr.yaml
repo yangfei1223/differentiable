@@ -1,7 +1,7 @@
 render_mode: pbr
 
 data:
-  mesh_path: data/helmet_260604/lowpoly.glb
+  mesh_path: data/helmet_260604/scene/lowpoly.glb
   gt_dir: data/helmet_260604/gt
   camera_path: data/helmet_260604/cameras.json
 

@@ -80,7 +80,7 @@ class PBRShadingModel(ShadingModel):
         prefiltered_color = sample_prefiltered(prefiltered, reflect_dir, roughness, self.n_mip_levels)
         NdotV_flat = NdotV.reshape(-1)
         roughness_flat = roughness.reshape(-1)
-        scale, bias = sample_brdf(self.brdf_lut, NdotV_flat, roughness_flat)
+        scale, bias = sample_brdf(self.brdf_lut.to(self.device), NdotV_flat, roughness_flat)
         scale = scale.reshape(*NdotV.shape)
         bias = bias.reshape(*NdotV.shape)
         specular = (F0 * scale + bias) * prefiltered_color
