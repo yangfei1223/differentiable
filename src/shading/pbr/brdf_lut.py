@@ -78,8 +78,13 @@ def generate_brdf_lut(size: int = 256, num_samples: int = 512) -> torch.Tensor:
 
     F_weight = G * VdotH / (NdotH * V + 1e-7)
 
-    scale = F_weight.mean(dim=-1)  # [size, size]
-    bias = (F_weight * (1.0 - (1.0 - VdotH).pow(5))).mean(dim=-1)  # [size, size]
+    # Split-sum: F = F0*(1-Fc) + Fc where Fc = (1-VdotH)^5
+    # specular = F0 * scale + bias
+    # scale = E[(1-Fc) * G*VH/(NH*NV)]   (Fresnel-weighted multiplier for F0)
+    # bias  = E[Fc * G*VH/(NH*NV)]        (constant compensation term)
+    Fc = (1.0 - VdotH).pow(5)
+    scale = (F_weight * (1.0 - Fc)).mean(dim=-1)  # [size, size]
+    bias = (F_weight * Fc).mean(dim=-1)  # [size, size]
 
     lut = torch.stack([scale, bias], dim=-1)  # [size, size, 2]
     return lut
