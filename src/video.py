@@ -64,9 +64,10 @@ def orbit_cameras(
 
 
 def render_video(
-    sh_texture: torch.Tensor,
     mesh: MeshData,
     output_path: str,
+    sh_texture: Optional[torch.Tensor] = None,
+    shading_model=None,
     center: Optional[list[float]] = None,
     radius: Optional[float] = None,
     height: Optional[float] = None,
@@ -78,15 +79,24 @@ def render_video(
     fill_ratio: float = 0.6,
     subtract_texture: Optional[torch.Tensor] = None,
 ) -> str:
-    """用训练好的 SH 纹理渲染一段轨道视频。
+    """用训练好的纹理/着色模型渲染一段轨道视频。
+
+    支持两种渲染路径:
+    - **shading_model** (新): 传入 ShadingModel 对象，使用
+      ``renderer.rasterize_and_interpolate`` + ``shading_model.shade``。
+    - **sh_texture** (旧): 传入 SH 系数纹理张量，使用传统
+      ``renderer.render(dc_param, rest_param, cam)`` 路径。
+
+    二者只需提供其一；若同时提供，优先使用 shading_model。
 
     相机参数（center, radius, height, fov_deg）未指定时
     从 mesh bounding box 自动计算，确保物体在画面中占合理比例。
 
     Args:
-        sh_texture: SH 系数纹理 [1, H, W, C]。
         mesh: 网格数据。
         output_path: 输出 mp4 路径。
+        sh_texture: SH 系数纹理 [1, H, W, C]（旧路径）。
+        shading_model: ShadingModel 实例（新路径）。
         center: 注视中心 [x, y, z]。None 则自动计算。
         radius: 水平环绕半径。None 则自动计算。
         height: 相机高度。None 则自动计算。
@@ -96,19 +106,8 @@ def render_video(
         fps: 帧率。
         device: 设备。
         fill_ratio: 物体在画面中的占比（0~1），用于自动计算 FOV。
-        subtract_texture: 若提供，渲染结果减去该纹理的渲染（净值）。
-        sh_texture: SH 系数纹理 [1, H, W, C]。
-        mesh: 网格数据。
-        output_path: 输出 mp4 路径。
-        center: 注视中心 [x, y, z]。None 则自动计算。
-        radius: 水平环绕半径。None 则自动计算。
-        height: 相机高度。None 则自动计算。
-        fov_deg: 垂直视场角。None 则自动计算。
-        num_frames: 帧数。
-        resolution: 渲染分辨率。
-        fps: 帧率。
-        device: 设备。
-        fill_ratio: 物体在画面中的占比（0~1），用于自动计算 FOV。
+        subtract_texture: 若提供，渲染结果减去该纹理的渲染（净值），
+            仅在旧路径（sh_texture）下生效。
 
     Returns:
         输出视频文件的绝对路径。
@@ -177,23 +176,30 @@ def render_video(
         device=device,
     )
 
-    # sh_texture is the full concatenated texture [1, H, W, n*3]
-    # Split into DC + Rest for renderer
-    n_dc = 3
-    features_dc = sh_texture[..., :n_dc]
-    features_rest = sh_texture[..., n_dc:]
-
-    dc_param = nn.Parameter(features_dc.to(device))
-    rest_param = nn.Parameter(features_rest.to(device))
-
-    # subtract_texture: 渲染减去该纹理的结果（高频净值）
+    # Legacy SH path: prepare dc/rest params from sh_texture
+    dc_param = None
+    rest_param = None
     sub_dc_param = None
     sub_rest_param = None
-    if subtract_texture is not None:
-        sub_dc = subtract_texture[..., :n_dc]
-        sub_rest = subtract_texture[..., n_dc:]
-        sub_dc_param = nn.Parameter(sub_dc.to(device))
-        sub_rest_param = nn.Parameter(sub_rest.to(device))
+
+    if shading_model is None:
+        if sh_texture is None:
+            raise ValueError("Either sh_texture or shading_model must be provided")
+        # sh_texture is the full concatenated texture [1, H, W, n*3]
+        # Split into DC + Rest for renderer
+        n_dc = 3
+        features_dc = sh_texture[..., :n_dc]
+        features_rest = sh_texture[..., n_dc:]
+
+        dc_param = nn.Parameter(features_dc.to(device))
+        rest_param = nn.Parameter(features_rest.to(device))
+
+        # subtract_texture: 渲染减去该纹理的结果（高频净值）
+        if subtract_texture is not None:
+            sub_dc = subtract_texture[..., :n_dc]
+            sub_rest = subtract_texture[..., n_dc:]
+            sub_dc_param = nn.Parameter(sub_dc.to(device))
+            sub_rest_param = nn.Parameter(sub_rest.to(device))
 
     # ---- 4. 创建视频写入器 ----
     output_path = str(Path(output_path).resolve())
@@ -207,12 +213,16 @@ def render_video(
     # ---- 5. 逐帧渲染 ----
     for i, cam in enumerate(cameras):
         with torch.no_grad():
-            rgb, mask, _ = renderer.render(dc_param, rest_param, cam)  # [1, H, W, 3]
-
-            # 减去 subtract_texture 的渲染结果
-            if sub_dc_param is not None:
-                rgb_sub, _, _ = renderer.render(sub_dc_param, sub_rest_param, cam)
-                rgb = (rgb - rgb_sub).clamp(0.0, 1.0)
+            if shading_model is not None:
+                # New path: use ShadingModel
+                rast, texc, wpos, interp_normals, vdirs = renderer.rasterize_and_interpolate(cam)
+                rgb, mask = shading_model.shade(rast, texc, wpos, interp_normals, vdirs, cam, resolution)
+            else:
+                # Legacy path: use sh_texture directly
+                rgb, mask, _ = renderer.render(dc_param, rest_param, cam)
+                if sub_dc_param is not None:
+                    rgb_sub, _, _ = renderer.render(sub_dc_param, sub_rest_param, cam)
+                    rgb = (rgb - rgb_sub).clamp(0.0, 1.0)
 
         # [1, H, W, 3] → [H, W, 3] numpy uint8
         # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，需垂直翻转为图像坐标 (原点左上)
