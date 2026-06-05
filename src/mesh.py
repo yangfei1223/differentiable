@@ -113,6 +113,9 @@ def load_mesh(path: str | Path) -> MeshData:
         uvs = np.array(mesh_obj.visual.uv, dtype=np.float64)
         if uvs.ndim == 2 and uvs.shape[1] == 2:
             uv_idx = np.array(mesh_obj.faces, dtype=np.int64)
+            # 修正 UV 到 [0, 1] 范围：某些模型（如 glTF）V 轴在 [-1, 0]
+            # nvdiffrast 要求 UV 在 [0, 1]
+            uvs[:, 1] = uvs[:, 1] % 1.0  # V: [-1, 0] → [0, 1]
         else:
             uvs = np.zeros((0, 2), dtype=np.float64)
             uv_idx = np.zeros_like(faces, dtype=np.int64)

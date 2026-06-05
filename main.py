@@ -13,7 +13,7 @@ from src.config import load_config
 
 def parse_args():
     parser = argparse.ArgumentParser(description="可微烘焙管线")
-    parser.add_argument("--config", type=str, default="configs/default.yaml",
+    parser.add_argument("--config", type=str, default="configs/train_helmet.yaml",
                         help="配置文件路径")
     parser.add_argument("--mode", type=str, default="train",
                         choices=["train", "export", "video"],
@@ -35,26 +35,32 @@ def main():
     args = parse_args()
     cfg = load_config(args.config)
 
+    # 从 gt_dir 推导数据集名：data/piano_260604/gt → piano_260604
+    gt_path = Path(cfg.data.gt_dir)
+    dataset_name = gt_path.parent.name  # e.g. "piano_260604"
+    output_base = Path(cfg.export.output_dir) / dataset_name
+
     if args.mode == "train":
         logger.info("=" * 60)
         logger.info("可微烘焙管线 — 训练模式")
         logger.info("=" * 60)
+        logger.info(f"  数据集: {dataset_name}")
         logger.info(f"  网格: {cfg.data.mesh_path}")
         logger.info(f"  GT 目录: {cfg.data.gt_dir}")
         logger.info(f"  SH 阶数: {cfg.texture.sh_order}")
         logger.info(f"  目标分辨率: {cfg.texture.target_resolution}")
         logger.info(f"  训练轮数: {cfg.training.num_epochs}")
+        logger.info(f"  输出目录: {output_base}")
 
         from src.trainer import Trainer
         trainer = Trainer(cfg)
-        output_dir = Path(cfg.export.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_base.mkdir(parents=True, exist_ok=True)
         trainer.train(
-            output_dir=str(output_dir),
+            output_dir=str(output_base),
             checkpoint_every=200,
             resume_from=args.resume,
         )
-        ckpt_path = output_dir / "sh_texture.pt"
+        ckpt_path = output_base / "sh_texture.pt"
         torch.save(trainer.get_sh_texture(), str(ckpt_path))
         logger.info(f"最终检查点已保存: {ckpt_path}")
 
@@ -65,10 +71,19 @@ def main():
 
         logger.info("可微烘焙管线 — 导出模式")
         sh_texture_raw = torch.load(args.checkpoint, map_location="cpu")
-        # 兼容新旧格式：新 checkpoint 是 dict，旧的是纯张量
-        sh_texture = sh_texture_raw["sh_texture"] if isinstance(sh_texture_raw, dict) and "sh_texture" in sh_texture_raw else sh_texture_raw
+        # 兼容新旧格式
+        if isinstance(sh_texture_raw, dict):
+            if "features_dc" in sh_texture_raw:
+                from src.sh import cat_sh_features
+                sh_texture = cat_sh_features(sh_texture_raw["features_dc"], sh_texture_raw["features_rest"])
+            elif "sh_texture" in sh_texture_raw:
+                sh_texture = sh_texture_raw["sh_texture"]
+            else:
+                sh_texture = sh_texture_raw
+        else:
+            sh_texture = sh_texture_raw
 
-        output_dir = Path(cfg.export.output_dir)
+        output_dir = output_base
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if cfg.export.format == "gltf":
@@ -98,7 +113,7 @@ def main():
 
         mesh = load_mesh(cfg.data.mesh_path)
         video_cfg = cfg.video
-        video_path = str(Path(cfg.export.output_dir) / "orbit.mp4")
+        video_path = str(output_base / "orbit.mp4")
 
         logger.info(f"  分辨率: {video_cfg.resolution}, 帧数: {video_cfg.num_frames}, FPS: {video_cfg.fps}")
         render_video(

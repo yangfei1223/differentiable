@@ -1,7 +1,7 @@
 data:
-  mesh_path: "data/piano_260604/scene/lowpoly.glb"
-  gt_dir: "data/piano_260604/gt"
-  camera_path: "data/piano_260604/cameras.json"
+  mesh_path: "data/helmet_260604/scene/lowpoly.glb"
+  gt_dir: "data/helmet_260604/gt"
+  camera_path: "data/helmet_260604/cameras.json"
 
 texture:
   sh_order: 2
@@ -10,16 +10,16 @@ texture:
   init_dc_value: 0.5
 
 training:
-  num_epochs: 1000
+  num_epochs: 2000
   lr: 0.01
   rest_lr_ratio: 0.05
   lr_decay: 0.5
-  lr_decay_epochs: [300, 600, 800]
+  lr_decay_epochs: [500, 1000, 1500]
   batch_size: 4
   resolution_schedule:
     - { epoch: 0, resolution: 512 }
-    - { epoch: 200, resolution: 1024 }
-    - { epoch: 500, resolution: 2048 }
+    - { epoch: 300, resolution: 1024 }
+    - { epoch: 700, resolution: 2048 }
 
 loss:
   lambda_l1: 1.0
@@ -36,10 +36,10 @@ export:
   sh_truncate_order: -1
 
 video:
-  center: [0.3, 2.0, -0.5]
-  radius: 14.0
-  height: 10.0
-  num_frames: 60
+  center: [0., 0., 0.]
+  radius: 3.5
+  height: 2.0
+  num_frames: 120
   fov_deg: 45.0
   resolution: 1024
   fps: 30

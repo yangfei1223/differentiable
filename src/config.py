@@ -40,6 +40,7 @@ class ResolutionStep:
 class TrainingConfig:
     num_epochs: int = 2000
     lr: float = 0.01
+    rest_lr_ratio: float = 0.05     # 高阶 SH 学习率 = lr * rest_lr_ratio
     lr_decay: float = 0.5
     lr_decay_epochs: List[int] = field(default_factory=lambda: [500, 1000, 1500])
     batch_size: int = 4
@@ -73,11 +74,11 @@ class ExportConfig:
 
 @dataclass
 class VideoConfig:
-    center: list[float] = field(default_factory=lambda: [0.3, 2.0, -0.5])
-    radius: float = 14.0
-    height: float = 10.0
+    center: list[float] | None = None      # None = auto from mesh
+    radius: float | None = None             # None = auto from mesh
+    height: float | None = None             # None = auto from mesh
+    fov_deg: float | None = None            # None = auto from mesh
     num_frames: int = 120
-    fov_deg: float = 45.0
     resolution: int = 1024
     fps: int = 30
 

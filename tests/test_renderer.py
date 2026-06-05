@@ -4,7 +4,7 @@ import torch
 import pytest
 
 from src.renderer import DifferentiableRenderer
-from src.sh import init_sh_texture
+from src.sh import init_sh_texture, cat_sh_features
 from src.camera import Camera
 
 
@@ -55,6 +55,15 @@ def _make_camera():
     )
 
 
+def _make_sh_params(sh_order=2, init_dc=0.5, resolution=16):
+    """创建 DC + Rest 参数对。"""
+    _dc, _rest = init_sh_texture(resolution, sh_order=sh_order, init_dc=init_dc)
+    return nn.Parameter(_dc.data.cuda()), nn.Parameter(_rest.data.cuda())
+
+
+import torch.nn as nn
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -68,8 +77,8 @@ def test_render_output_shape():
     )
     camera = _make_camera()
 
-    sh_texture = torch.nn.Parameter(init_sh_texture(16, sh_order=2, init_dc=0.5).data.cuda())
-    rgb, mask = renderer.render(sh_texture, camera)
+    features_dc, features_rest = _make_sh_params()
+    rgb, mask = renderer.render(features_dc, features_rest, camera)
 
     assert rgb.shape == (1, 64, 64, 3), f"rgb shape = {rgb.shape}"
     assert mask.shape == (1, 64, 64), f"mask shape = {mask.shape}"
@@ -78,18 +87,43 @@ def test_render_output_shape():
 
 @cuda_skip
 def test_render_gradient_flows():
-    """梯度应能从渲染结果流回到 sh_texture 参数。"""
+    """梯度应能从渲染结果流回到 DC 和 Rest 参数。"""
     vertices, faces, uvs, uv_idx = _make_quad_mesh()
     renderer = DifferentiableRenderer(
         vertices, faces, uvs, uv_idx, resolution=64, device="cuda",
     )
     camera = _make_camera()
 
-    sh_texture = torch.nn.Parameter(init_sh_texture(16, sh_order=2, init_dc=0.5).data.cuda())
-    rgb, mask = renderer.render(sh_texture, camera)
+    features_dc, features_rest = _make_sh_params()
+    rgb, mask = renderer.render(features_dc, features_rest, camera)
 
     loss = rgb.sum()
     loss.backward()
 
-    assert sh_texture.grad is not None, "sh_texture 应有梯度"
-    assert sh_texture.grad.abs().sum() > 0, "sh_texture 梯度不应全为零"
+    assert features_dc.grad is not None, "features_dc 应有梯度"
+    assert features_dc.grad.abs().sum() > 0, "features_dc 梯度不应全为零"
+    assert features_rest.grad is not None, "features_rest 应有梯度"
+
+
+@cuda_skip
+def test_render_dc_color_correct():
+    """DC only (order 0) 渲染颜色应 = init_dc（经 +0.5 shift）。"""
+    vertices, faces, uvs, uv_idx = _make_quad_mesh()
+    renderer = DifferentiableRenderer(
+        vertices, faces, uvs, uv_idx, resolution=64, device="cuda",
+    )
+    camera = _make_camera()
+
+    init_dc = 0.5
+    features_dc, features_rest = _make_sh_params(sh_order=0, init_dc=init_dc, resolution=16)
+    # order 0: features_rest should be empty [1, H, W, 0]
+    assert features_rest.shape[-1] == 0
+
+    rgb, mask = renderer.render(features_dc, features_rest, camera)
+
+    # 3DGS: DC stores (init_dc - 0.5) / C0
+    # SH eval: C0 * dc_coeff + 0.5 = C0 * (init_dc-0.5)/C0 + 0.5 = init_dc
+    center_rgb = rgb[0, 32, 32]  # [3]
+    assert mask[0, 32, 32] > 0, "中心像素应可见"
+    assert torch.allclose(center_rgb, torch.tensor(init_dc, device="cuda"), atol=0.05), \
+        f"DC color 应接近 {init_dc}, 实际 {center_rgb.tolist()}"

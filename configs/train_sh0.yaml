@@ -1,7 +1,7 @@
 data:
-  mesh_path: "data/scene/lowpoly.glb"
-  gt_dir: "data/gt"
-  camera_path: "data/cameras.json"
+  mesh_path: "data/piano_260604/scene/lowpoly.glb"
+  gt_dir: "data/piano_260604/gt"
+  camera_path: "data/piano_260604/cameras.json"
 
 texture:
   sh_order: 0
@@ -12,6 +12,7 @@ texture:
 training:
   num_epochs: 1000
   lr: 0.01
+  rest_lr_ratio: 0.05
   lr_decay: 0.5
   lr_decay_epochs: [300, 600, 800]
   batch_size: 4

@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from src.exporter import export_diffuse_texture, export_sh_channels, export_gltf
-from src.sh import _C0, init_sh_texture
+from src.sh import _C0, init_sh_texture, cat_sh_features, RGB2SH, SH2RGB
 
 
 # ---------------------------------------------------------------------------
@@ -16,9 +16,9 @@ from src.sh import _C0, init_sh_texture
 # ---------------------------------------------------------------------------
 
 def _make_sh_texture_dc(dc: float = 0.5, resolution: int = 16) -> torch.Tensor:
-    """创建一个仅含 DC 分量的 SH 纹理 [1, H, W, 27]。"""
-    tex = init_sh_texture(resolution, sh_order=2, init_dc=dc)
-    return tex.data  # 脱离 nn.Parameter
+    """创建一个仅含 DC 分量的完整 SH 纹理 [1, H, W, 27]。"""
+    features_dc, features_rest = init_sh_texture(resolution, sh_order=2, init_dc=dc)
+    return cat_sh_features(features_dc.data, features_rest.data)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ def test_export_diffuse_png():
             f"PNG 尺寸应为 ({resolution}, {resolution})，实际为 {img.size}"
         )
 
-        # 验证像素值接近 dc（DC = sh_dc * _C0, 然后 gamma 校正: val^(1/2.2)）
+        # 验证像素值接近 dc（3DGS: SH2RGB(dc) = dc, 然后 gamma 校正: val^(1/2.2)）
         arr = np.array(img, dtype=np.float32) / 255.0
         # init_dc=0.5 → DC color = 0.5 → gamma: 0.5^(1/2.2) ≈ 0.7297
         expected = dc ** (1.0 / 2.2)

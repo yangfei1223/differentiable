@@ -64,13 +64,15 @@ class DifferentiableRenderer:
     # ------------------------------------------------------------------
     def render(
         self,
-        sh_texture: nn.Parameter,
+        features_dc: torch.Tensor,
+        features_rest: torch.Tensor,
         camera,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """渲染一帧。
 
         Args:
-            sh_texture: SH 系数纹理，形状 ``[1, H_tex, W_tex, 27]``。
+            features_dc: SH DC 系数纹理，形状 ``[1, H_tex, W_tex, 3]``。
+            features_rest: SH 高阶系数纹理，形状 ``[1, H_tex, W_tex, (n-1)*3]``。
             camera: :class:`Camera` 对象（需提供 ``mvp_torch()`` 与
                 ``position``）。
 
@@ -109,15 +111,16 @@ class DifferentiableRenderer:
         view_dir = cam_pos - world_pos  # [1, H, W, 3]
         view_dir = view_dir / (view_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
-        # ---- 7. SH 纹理采样 ----
+        # ---- 7. 拼接 DC + Rest → 完整 SH 纹理并采样 ----
+        full_tex = torch.cat([features_dc, features_rest], dim=-1)  # [1, H, W, n*3]
         tex = dr.texture(
-            sh_texture,
+            full_tex,
             texc,
             filter_mode="linear",
-            boundary_mode="zero",
+            boundary_mode="clamp",
         )  # [1, H, W, C]
 
-        # ---- 8. SH 解码 ----
+        # ---- 8. SH 解码（3DGS 风格） ----
         n_sh = tex.shape[-1] // 3  # SH 系数个数: 1(order0), 4(order1), 9(order2)
         sh_order = int(n_sh ** 0.5) - 1
         sh_nx3 = tex.reshape(*tex.shape[:-1], n_sh, 3)
@@ -129,8 +132,9 @@ class DifferentiableRenderer:
         basis_exp = basis.unsqueeze(-1)  # [1, H, W, n_sh, 1]
         rgb = (sh_nx3 * basis_exp).sum(dim=-2)  # [1, H, W, 3]
 
-        # clamp 负值：SH 高阶系数可能产生负贡献，截断到 0
-        rgb = rgb.clamp(min=0.0)
+        # 3DGS 约定: SH 输出 + 0.5 还原为 RGB，然后 clamp
+        rgb = rgb + 0.5
+        rgb = rgb.clamp(0.0, 1.0)
 
         # ---- 9. 遮罩 ----
         mask = (rast[..., 3] > 0).float()  # [1, H, W]

@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from src.sh import _C0
+from src.sh import _C0, SH2RGB
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ def export_diffuse_texture(
 ) -> str:
     """从 SH 纹理提取 DC 分量（漫反射颜色）并保存为 PNG。
 
-    DC 颜色 = SH DC 系数 × _C0，对前三个通道（R, G, B）分别计算。
+    DC 颜色使用 3DGS 约定: SH2RGB(dc_coeff) = dc_coeff * C0 + 0.5。
 
     Args:
         sh_texture: SH 系数，形状 ``[1, H, W, 27]``。
@@ -56,11 +56,10 @@ def export_diffuse_texture(
         保存的文件路径。
     """
     # DC 系数在前 3 个通道: sh_texture[..., 0] 是 R-DC, ..., sh_texture[..., 2] 是 B-DC
-    # 形状 [1, H, W, 27] → 取前 3 → [1, H, W, 3]
-    dc_coeffs = sh_texture[..., :3]
+    dc_coeffs = sh_texture[..., :3]  # [1, H, W, 3]
 
-    # DC 颜色 = sh_coeff * _C0
-    diffuse = dc_coeffs * _C0  # [1, H, W, 3]
+    # DC 颜色 = SH2RGB(dc_coeff) = dc_coeff * C0 + 0.5
+    diffuse = SH2RGB(dc_coeffs)  # [1, H, W, 3]
 
     # 线性空间 → sRGB gamma 校正
     diffuse = diffuse.clamp(0, 1).pow(1.0 / 2.2)
