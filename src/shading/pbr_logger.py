@@ -35,9 +35,10 @@ class PBRLogger(ShadingLogger):
 
         # 1. 导出 PBR 材质贴图: base_color, roughness, metallic, env_map
         model.export(output_dir)
-        # 额外保存 BRDF LUT
+        # 保存 BRDF LUT (.pt + .png)
         brdf_path = os.path.join(output_dir, "brdf_lut.pt")
         torch.save(model.brdf_lut, brdf_path)
+        self._export_brdf_lut_image(model.brdf_lut, output_dir)
         print(f"  [Debug] PBR textures + BRDF LUT → {output_dir}")
 
         # 2. Compare: GT | Rendered / Diffuse | Specular
@@ -114,6 +115,32 @@ class PBRLogger(ShadingLogger):
                 np.concatenate([rs[2], rs[3]], axis=1),
             ], axis=0)
             cv2.imwrite(os.path.join(output_dir, f"compare_{ci:04d}.png"), canvas)
+
+    def _export_brdf_lut_image(self, brdf_lut: torch.Tensor, output_dir: str) -> None:
+        """导出 BRDF LUT 为 PNG（左 scale / 右 bias 并排）。"""
+        import cv2
+        # brdf_lut: [size, size, 2] — scale 和 bias 各一个通道
+        size = brdf_lut.shape[0]
+        scale = brdf_lut[:, :, 0].numpy()  # [size, size]
+        bias = brdf_lut[:, :, 1].numpy()
+
+        # 归一化到 [0, 255]
+        scale_img = (scale * 255).clip(0, 255).astype(np.uint8)
+        bias_img = (bias * 255).clip(0, 255).astype(np.uint8)
+
+        # 用 colormap 增强可读性
+        scale_color = cv2.applyColorMap(scale_img, cv2.COLORMAP_VIRIDIS)
+        bias_color = cv2.applyColorMap(bias_img, cv2.COLORMAP_VIRIDIS)
+
+        # 拼文字标签
+        scale_color = cv2.putText(scale_color, "Scale (F0 mult)", (4, 20),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        bias_color = cv2.putText(bias_color, "Bias (constant)", (4, 20),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+        # 并排拼接
+        canvas = np.concatenate([scale_color, bias_color], axis=1)
+        cv2.imwrite(os.path.join(output_dir, "brdf_lut.png"), canvas)
 
     def render_component_video(self, model, mesh, output_dir, filename, mode, **vk):
         """渲染 diffuse/specular 单分量视频。
