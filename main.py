@@ -38,6 +38,9 @@ def main():
     # 从 gt_dir 推导数据集名：data/piano_260604/gt → piano_260604
     gt_path = Path(cfg.data.gt_dir)
     dataset_name = gt_path.parent.name  # e.g. "piano_260604"
+    # PBR 模式加后缀避免覆盖 SH 结果: output/helmet_260604_pbr
+    if cfg.render_mode != "sh":
+        dataset_name = f"{dataset_name}_{cfg.render_mode}"
     output_base = Path(cfg.export.output_dir) / dataset_name
 
     if args.mode == "train":
