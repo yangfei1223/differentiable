@@ -1,65 +1,103 @@
-"""测试 equirect 环境贴图。"""
+"""测试 EnvironmentMap 类。"""
 import torch
-from src.shading.pbr.env_map import (
-    init_env_map,
-    direction_to_equirect,
-    sample_env_map,
-)
+import torch.nn as nn
+from src.shading.pbr.env_map import EnvironmentMap
 
 
-def test_init_env_map_default():
-    env = init_env_map(32, 64)
-    assert env.shape == (1, 32, 64, 3)
-    assert isinstance(env, torch.nn.Parameter)
+def test_env_map_init_default():
+    env = EnvironmentMap(32, 64)
+    assert env.raw.shape == (1, 32, 64, 3)
+    assert isinstance(env.raw, nn.Parameter)
 
 
-def test_direction_to_equirect_forward():
-    """正前方 (+Z) 应映射到 equirect 中心。"""
-    dirs = torch.tensor([[0.0, 0.0, 1.0]])
-    u, v = direction_to_equirect(dirs)
-    assert abs(u[0].item() - 0.75) < 0.01
-    assert abs(v[0].item() - 0.5) < 0.01
+def test_env_map_init_with_image():
+    img = torch.rand(1, 16, 32, 3) * 2.0  # HDR values
+    env = EnvironmentMap(16, 32, init_image=img)
+    decoded = env.decode()
+    assert decoded.shape == (1, 16, 32, 3)
+    # softplus(x) > 0 for all x, decoded should be close to original
+    assert (decoded > 0).all()
 
 
-def test_direction_to_equirect_up():
-    """正上方 (+Y) 应映射到 equirect 顶部。"""
-    dirs = torch.tensor([[0.0, 1.0, 0.0]])
-    u, v = direction_to_equirect(dirs)
-    # clamp(-0.999, 0.999) causes slight deviation from 1.0
-    assert abs(v[0].item() - 1.0) < 0.02
+def test_env_map_decode_positive():
+    env = EnvironmentMap(16, 32)
+    decoded = env.decode()
+    assert (decoded > 0).all()
 
 
-def test_direction_to_equirect_gradient():
+def test_env_map_direction_to_uv():
+    uv = EnvironmentMap.direction_to_uv(torch.tensor([[0.0, 0.0, 1.0]]))
+    assert abs(uv[0, 0].item() - 0.75) < 0.01
+    assert abs(uv[0, 1].item() - 0.5) < 0.01
+
+
+def test_env_map_direction_to_uv_up():
+    uv = EnvironmentMap.direction_to_uv(torch.tensor([[0.0, 1.0, 0.0]]))
+    assert abs(uv[0, 1].item() - 1.0) < 0.02
+
+
+def test_env_map_direction_to_uv_gradient():
     dirs = torch.tensor([[0.0, 0.0, 1.0]], requires_grad=True)
-    u, v = direction_to_equirect(dirs)
-    u.sum().backward()
+    uv = EnvironmentMap.direction_to_uv(dirs)
+    uv.sum().backward()
     assert dirs.grad is not None
 
 
-def test_sample_env_map_basic():
-    """无 mip level 时直接采样（linear）。"""
-    env = init_env_map(16, 32).cuda()
+def test_env_map_build_mipmap():
+    env = EnvironmentMap(32, 64, n_mip_levels=5).cuda()
+    mip = env.build_mipmap()
+    assert len(mip) == 4  # level 1..4
+    # 逐级递减: 32→16, 16→8, 8→4, 4→2
+    assert mip[0].shape == (1, 16, 32, 3)
+    assert mip[1].shape == (1, 8, 16, 3)
+    assert mip[2].shape == (1, 4, 8, 3)
+    assert mip[3].shape == (1, 2, 4, 3)
+
+
+def test_env_map_sample_basic():
+    env = EnvironmentMap(32, 64).cuda()
     dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
-    color = sample_env_map(env, dirs)
+    color = env.sample(dirs)
     assert color.shape == (1, 3)
 
 
-def test_sample_env_map_with_mip():
-    """带 mip_level_bias 时使用 nvdiffrast mipmap。"""
-    env = init_env_map(32, 64).cuda()
+def test_env_map_sample_with_mip():
+    env = EnvironmentMap(32, 64).cuda()
     dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+    mip_level = torch.tensor([[0.5]]).cuda()
+    color = env.sample(dirs, mip_level=mip_level)
+    assert color.shape == (1, 3)
+
+
+def test_env_map_sample_diffuse():
+    env = EnvironmentMap(32, 64).cuda()
+    normals = torch.tensor([[0.0, 1.0, 0.0]]).cuda()
+    color = env.sample_diffuse(normals)
+    assert color.shape == (1, 3)
+
+
+def test_env_map_sample_specular():
+    env = EnvironmentMap(32, 64).cuda()
+    reflect = torch.tensor([[0.0, 1.0, 0.0]]).cuda()
     roughness = torch.tensor([[0.5]]).cuda()
-    color = sample_env_map(env, dirs, mip_level_bias=roughness)
+    color = env.sample_specular(reflect, roughness)
     assert color.shape == (1, 3)
 
 
-def test_sample_env_map_gradient():
-    """采样可导。"""
-    import torch.nn as nn
-    raw = init_env_map(16, 32)
-    env = nn.Parameter(raw.data.cuda())  # 确保是 leaf tensor
+def test_env_map_gradient():
+    env = EnvironmentMap(16, 32).cuda()
     dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
-    color = sample_env_map(env, dirs)
+    color = env.sample(dirs)
     loss = color.sum()
     loss.backward()
-    assert env.grad is not None
+    assert env.raw.grad is not None
+
+
+def test_env_map_mipmap_gradient():
+    env = EnvironmentMap(16, 32).cuda()
+    dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+    mip_level = torch.tensor([[0.5]]).cuda()
+    color = env.sample(dirs, mip_level=mip_level)
+    loss = color.sum()
+    loss.backward()
+    assert env.raw.grad is not None

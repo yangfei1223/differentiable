@@ -11,13 +11,7 @@ import torch.nn.functional as F
 from src.config import Config
 from src.shading.base import ShadingModel
 from src.shading.pbr.material import init_material_texture, decode_material, compute_F0
-from src.shading.pbr.env_map import (
-    init_env_map,
-    _decode_env_map,
-    _compute_max_mip_level,
-    prefilter_mipmap,
-    sample_env_map,
-)
+from src.shading.pbr.env_map import EnvironmentMap
 from src.shading.pbr.brdf_lut import generate_brdf_lut, sample_brdf
 
 
@@ -29,22 +23,21 @@ class PBRShadingModel(ShadingModel):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.mat_texture: nn.Parameter | None = None
-        self.env_map: nn.Parameter | None = None
+        self.env_map: EnvironmentMap | None = None
         self.brdf_lut: torch.Tensor | None = None
 
         pbr_cfg = config.pbr
         self.brdf_lut = generate_brdf_lut(pbr_cfg.brdf_lut_size)
-        self.n_mip_levels = pbr_cfg.n_mip_levels
 
     def parameters(self) -> list[nn.Parameter]:
-        return [self.mat_texture, self.env_map]
+        return [self.mat_texture, self.env_map.raw]
 
     def init_textures(self, resolution: int) -> None:
         pbr_cfg = self.config.pbr
         eh, ew = pbr_cfg.env_map_res
 
         self.mat_texture = nn.Parameter(init_material_texture(resolution).data.to(self.device))
-        self.env_map = nn.Parameter(init_env_map(eh, ew).data.to(self.device))
+        self.env_map = EnvironmentMap(height=eh, width=ew).to(self.device)
 
     def shade(
         self,
@@ -70,22 +63,14 @@ class PBRShadingModel(ShadingModel):
         reflect_dir = 2.0 * NdotV * normals - view_dirs
         reflect_dir = reflect_dir / (reflect_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
-        # 3. 生成高斯预滤波 mipmap（可导，替代 nvdiffrast 内置 box filter）
-        env_decoded = _decode_env_map(self.env_map)
-        H, W = env_decoded.shape[1], env_decoded.shape[2]
-        max_mip = _compute_max_mip_level(H, W)
-        custom_mip = prefilter_mipmap(self.env_map, max_mip)
-
-        # 4. Diffuse 项 — max_mip level（最模糊的预滤波级）
-        diffuse_bias = torch.full_like(NdotV, float(max_mip))
-        irradiance = sample_env_map(self.env_map, normals, mip_level_bias=diffuse_bias, custom_mip=custom_mip)
+        # 3. Diffuse 项
+        irradiance = self.env_map.sample_diffuse(normals)
         F0 = compute_F0(base_color, metallic)
         kd = (1.0 - metallic) * (1.0 - F0)
         diffuse = kd * base_color * irradiance
 
-        # 5. Specular 项 — roughness 决定 mip level
-        specular_bias = roughness * max_mip
-        prefiltered_color = sample_env_map(self.env_map, reflect_dir, mip_level_bias=specular_bias, custom_mip=custom_mip)
+        # 4. Specular 项
+        prefiltered_color = self.env_map.sample_specular(reflect_dir, roughness)
         NdotV_flat = NdotV.reshape(-1)
         roughness_flat = roughness.reshape(-1)
         scale, bias = sample_brdf(self.brdf_lut.to(self.device), NdotV_flat, roughness_flat)
@@ -93,11 +78,11 @@ class PBRShadingModel(ShadingModel):
         bias = bias.reshape(*NdotV.shape)
         specular = (F0 * scale + bias) * prefiltered_color
 
-        # 6. 合成
+        # 5. 合成
         rgb = diffuse + specular
         rgb = rgb.clamp(0.0, 1.0)
 
-        # 7. 遮罩
+        # 6. 遮罩
         mask = (rast_out[..., 3] > 0).float()
         rgb = rgb * mask.unsqueeze(-1)
 
@@ -125,14 +110,14 @@ class PBRShadingModel(ShadingModel):
         return {
             "render_mode": "pbr",
             "mat_texture": self.mat_texture.data.detach().cpu(),
-            "env_map": self.env_map.data.detach().cpu(),
+            "env_map": self.env_map.raw.data.detach().cpu(),
         }
 
     def load_state_dict(self, state: dict) -> None:
         if "mat_texture" in state:
             self.mat_texture = nn.Parameter(state["mat_texture"].to(self.device))
         if "env_map" in state:
-            self.env_map = nn.Parameter(state["env_map"].to(self.device))
+            self.env_map.raw = nn.Parameter(state["env_map"].to(self.device))
         if "brdf_lut" in state:
             self.brdf_lut = state["brdf_lut"]
 
@@ -167,12 +152,8 @@ class PBRShadingModel(ShadingModel):
         paths.append(p)
 
         # env_map.png
-        from src.shading.pbr.env_map import _decode_env_map
-        env_decoded = _decode_env_map(self.env_map)
-        env_img = env_decoded[0].clamp(0, 1).detach().cpu().numpy()
-        env_img = (env_img * 255).astype(np.uint8)
         p = os.path.join(output_dir, "env_map.png")
-        Image.fromarray(env_img, "RGB").save(p)
+        self.env_map.export_image(p)
         paths.append(p)
 
         return paths
