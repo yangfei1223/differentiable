@@ -125,6 +125,8 @@ class PBRShadingModel(ShadingModel):
             self.mat_texture = nn.Parameter(state["mat_texture"].to(self.device))
         if "env_map" in state:
             self.env_map = nn.Parameter(state["env_map"].to(self.device))
+        if "brdf_lut" in state:
+            self.brdf_lut = state["brdf_lut"]
 
     def export(self, output_dir: str) -> list[str]:
         import numpy as np

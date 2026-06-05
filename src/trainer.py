@@ -60,7 +60,11 @@ class Trainer:
             gamma=config.training.lr_decay,
         )
 
-        # ---- 5. 组合损失 ----
+        # ---- 5. 日志器 ----
+        from src.shading.logger import create_logger
+        self.logger = create_logger(config.render_mode, config)
+
+        # ---- 6. 组合损失 ----
         self.criterion = CombinedLoss(
             lambda_l1=config.loss.lambda_l1,
             lambda_ssim=config.loss.lambda_ssim,
@@ -323,161 +327,49 @@ class Trainer:
                 ep_dir = os.path.join(output_dir, ep_tag)
                 os.makedirs(ep_dir, exist_ok=True)
 
-                ckpt_path = os.path.join(ep_dir, "sh_texture.pt")
-                ckpt = self.model.state_dict()
-                ckpt["epoch"] = epoch + 1
-                ckpt["loss"] = avg_loss
-                ckpt["resolution"] = self.current_resolution
-                torch.save(ckpt, ckpt_path)
+                ckpt_path = self.logger.save_checkpoint(
+                    self.model, ep_dir, epoch + 1, avg_loss, self.current_resolution,
+                )
                 print(f"  [Checkpoint] {ckpt_path}")
 
-                # ---- 调试输出: compare / diffuse / video ----
+                # ---- 调试输出: curves + 着色模型特有日志 ----
                 try:
                     self._export_debug(ep_dir, epoch=epoch)
                 except Exception as e:
                     print(f"  [Debug export warning] {e}")
 
     # ------------------------------------------------------------------
-    # Debug exports
+    # Debug exports (delegate to shading logger)
     # ------------------------------------------------------------------
     def _export_debug(self, output_dir: str, epoch: int) -> None:
-        """在 checkpoint 时输出调试可视化。"""
-        import cv2
+        """曲线 + 着色模型特有调试输出。"""
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from src.exporter import export_diffuse_texture
-        from src.video import render_video
 
-        tex = self.model.get_material_texture()
-
-        # 0. Loss + PSNR 曲线
+        # Loss + PSNR 曲线 (通用)
         epochs = self.history["epoch"]
         losses = self.history["loss"]
         psnrs = self.history["psnr"]
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
         ax1.plot(epochs, losses, "b-", linewidth=1)
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel("Loss")
-        ax1.set_title("Training Loss")
+        ax1.set_xlabel("Epoch"); ax1.set_ylabel("Loss"); ax1.set_title("Training Loss")
         ax1.grid(True, alpha=0.3)
-
         ax2.plot(epochs, psnrs, "r-", linewidth=1)
-        ax2.set_xlabel("Epoch")
-        ax2.set_ylabel("PSNR (dB)")
-        ax2.set_title("PSNR")
+        ax2.set_xlabel("Epoch"); ax2.set_ylabel("PSNR (dB)"); ax2.set_title("PSNR")
         ax2.grid(True, alpha=0.3)
-
         fig.suptitle(f"Epoch {epoch+1}  |  Loss: {losses[-1]:.4f}  |  PSNR: {psnrs[-1]:.2f} dB", fontsize=12)
         fig.tight_layout()
-        curve_path = os.path.join(output_dir, "curves.png")
-        fig.savefig(curve_path, dpi=100)
-        # 也保存一份到 output root，方便随时查看最新状态
+        fig.savefig(os.path.join(output_dir, "curves.png"), dpi=100)
         fig.savefig(os.path.join(os.path.dirname(output_dir), "curves.png"), dpi=100)
         plt.close(fig)
 
-        # 1. Diffuse 贴图
-        diffuse_path = os.path.join(output_dir, "diffuse.png")
-        export_diffuse_texture(tex, diffuse_path, self.config.texture.sh_order)
-
-        # 2. GT vs Rendered 对比 (均匀采样 4 个方向: 前/右/后/左, 2x2 atlas)
-        num_views = len(self.dataset)
-        compare_count = min(4, num_views)
-        compare_indices = [int(i * num_views / compare_count) for i in range(compare_count)]
-
-        # 准备 DC-only 参数（高频置零）
-        if hasattr(self.model, 'features_dc'):
-            dc_only = self.model.features_dc.data
-            rest_data = self.model.features_rest.data
-        else:
-            dc_only = None
-            rest_data = None
-
-        for ci, idx in enumerate(compare_indices):
-            img_np, camera = self.dataset[idx]
-            gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)
-
-            # 渲染 2 个版本：Full 和 DC only
-            with torch.no_grad():
-                if self.config.render_mode == "sh":
-                    rgb_full, mask, _ = self.renderer.render(self.model.features_dc, self.model.features_rest, camera)
-                    rgb_dc, _, _ = self.renderer.render(dc_only, rest_data * 0, camera)
-                else:
-                    rast, texc, wpos, inorm, vdir = self.renderer.rasterize_and_interpolate(camera)
-                    rgb_full, mask = self.model.shade(rast, texc, wpos, inorm, vdir, camera, self.current_resolution)
-                    rgb_dc = rgb_full  # PBR has no DC/rest split
-                    mask = mask
-
-            # 高频净贡献 = Full - DC（可能有负值，clamp 到 [0,1]）
-            rgb_hf = (rgb_full - rgb_dc).clamp(0, 1)
-
-            mask = mask.flip(1)
-            mask_np = mask[0].cpu().numpy()
-
-            def to_srgb_bgr(rgb_tensor):
-                img = rgb_tensor[0].flip(0).clamp(0, 1).pow(1.0 / 2.2).cpu().numpy()
-                img = (img * 255).astype(np.uint8)
-                bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                bgr[mask_np < 0.5] = 0
-                return bgr
-
-            gt_bgr = cv2.cvtColor((img_np.transpose(1, 2, 0) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-
-            panels = [
-                (gt_bgr, "GT"),
-                (to_srgb_bgr(rgb_full), "Full SH"),
-                (to_srgb_bgr(rgb_dc), "DC Only"),
-                (to_srgb_bgr(rgb_hf), "High Freq"),
-            ]
-
-            # 统一尺寸并加标签
-            target_h = min(p[0].shape[0] for p in panels)
-            resized = []
-            for img, label in panels:
-                h, w = img.shape[:2]
-                r = cv2.resize(img, (w * target_h // h, target_h))
-                cv2.putText(r, label, (8, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                resized.append(r)
-
-            # 2x2 atlas: top=GT|Full, bottom=DC|HF
-            top = np.concatenate([resized[0], resized[1]], axis=1)
-            bottom = np.concatenate([resized[2], resized[3]], axis=1)
-            canvas = np.concatenate([top, bottom], axis=0)
-
-            compare_path = os.path.join(output_dir, f"compare_{ci:04d}.png")
-            cv2.imwrite(compare_path, canvas)
-
-        # 3. 视频: Full SH + DC only + High-freq only
-        from src.mesh import load_mesh
-        mesh = load_mesh(self.config.data.mesh_path)
-        cfg = self.config
-        video_kwargs = dict(
-            mesh=mesh,
-            center=cfg.video.center,
-            radius=cfg.video.radius,
-            height=cfg.video.height,
-            num_frames=cfg.video.num_frames,
-            fov_deg=cfg.video.fov_deg,
-            resolution=cfg.video.resolution,
-            fps=cfg.video.fps,
+        # 着色模型特有输出
+        self.logger.export_debug(
+            self.model, self.renderer, self.dataset, output_dir, epoch,
+            self.history, self.device, self.current_resolution,
         )
-
-        # Full SH / PBR
-        render_video(sh_texture=tex, output_path=os.path.join(output_dir, "orbit.mp4"), **video_kwargs)
-
-        # DC only video (SH only)
-        if hasattr(self.model, 'features_dc'):
-            dc_tex = torch.cat([self.model.features_dc.data.detach().cpu(),
-                                torch.zeros_like(self.model.features_rest.data.detach().cpu())], dim=-1)
-            render_video(sh_texture=dc_tex, output_path=os.path.join(output_dir, "orbit_dc.mp4"), **video_kwargs)
-
-            # High-freq video: Full - DC 逐帧差分
-            render_video(sh_texture=tex, output_path=os.path.join(output_dir, "orbit_hf.mp4"),
-                         subtract_texture=dc_tex, **video_kwargs)
-
-        print(f"  [Debug] diffuse + compare + video → {output_dir}")
 
     # ------------------------------------------------------------------
     # Accessors
