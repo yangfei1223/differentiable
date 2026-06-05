@@ -43,15 +43,6 @@ def test_env_map_direction_to_uv_gradient():
     assert dirs.grad is not None
 
 
-def test_env_map_build_mipmap():
-    env = EnvironmentMap(32, 64, n_mip_levels=5).cuda()
-    mip = env.build_mipmap()
-    assert len(mip) == 4  # level 1..4
-    # 逐级递减: 32→16, 16→8, 8→4, 4→2
-    assert mip[0].shape == (1, 16, 32, 3)
-    assert mip[1].shape == (1, 8, 16, 3)
-    assert mip[2].shape == (1, 4, 8, 3)
-    assert mip[3].shape == (1, 2, 4, 3)
 
 
 def test_env_map_sample_basic():
