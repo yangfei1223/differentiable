@@ -34,7 +34,7 @@ renderer = DifferentiableRenderer(verts, faces, uvs, uv_idx, resolution=512, dev
 sh_param = nn.Parameter(tex.data.to("cuda"))
 
 with torch.no_grad():
-    rgb, mask = renderer.render(sh_param, cams[0])
+    rgb, mask, _ = renderer.render(sh_param, cams[0])
 
 rgb_np = rgb[0].cpu().clamp(0, 1).numpy()
 mask_np = mask[0].cpu().numpy()

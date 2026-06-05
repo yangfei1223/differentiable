@@ -25,7 +25,7 @@ for i in range(3):
     cam = cams[i]
 
     with torch.no_grad():
-        rgb, mask = renderer.render(sh_param, cam)
+        rgb, mask, _ = renderer.render(sh_param, cam)
     # linear → sRGB gamma
     render_np = rgb[0].cpu().flip(0).clamp(0, 1).pow(1.0/2.2).numpy()
     render_np = (render_np * 255).astype(np.uint8)

@@ -71,6 +71,45 @@ class DifferentiableRenderer:
         self.glctx = dr.RasterizeGLContext()
 
     # ------------------------------------------------------------------
+    # rasterize_and_interpolate
+    # ------------------------------------------------------------------
+    def rasterize_and_interpolate(
+        self, camera
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """光栅化 + 插值，返回中间结果供着色模型使用。
+
+        Returns:
+            (rast_out, texc, world_pos, interp_normals, view_dirs)
+        """
+        dr = _get_dr()
+        h = w = self.resolution
+
+        mvp = camera.mvp_torch().to(self.device)
+        verts = self.vertices
+        ones = torch.ones_like(verts[..., :1])
+        verts_h = torch.cat([verts, ones], dim=-1)
+        clip = torch.bmm(verts_h, mvp.transpose(1, 2))
+
+        rast, _ = dr.rasterize(self.glctx, clip, self.faces, resolution=[h, w])
+        texc, _ = dr.interpolate(self.uvs, rast, self.uv_idx)
+        world_pos, _ = dr.interpolate(self.vertices, rast, self.faces)
+
+        if self.normals is not None and self.normal_idx is not None:
+            interp_normals, _ = dr.interpolate(self.normals, rast, self.normal_idx)
+            interp_normals = interp_normals / (interp_normals.norm(dim=-1, keepdim=True) + 1e-8)
+        else:
+            interp_normals = torch.zeros_like(world_pos)
+
+        cam_pos = (
+            torch.tensor(camera.position, dtype=torch.float32, device=self.device)
+            .reshape(1, 1, 1, 3)
+        )
+        view_dirs = cam_pos - world_pos
+        view_dirs = view_dirs / (view_dirs.norm(dim=-1, keepdim=True) + 1e-8)
+
+        return rast, texc, world_pos, interp_normals, view_dirs
+
+    # ------------------------------------------------------------------
     # render
     # ------------------------------------------------------------------
     def render(
@@ -78,7 +117,7 @@ class DifferentiableRenderer:
         features_dc: torch.Tensor,
         features_rest: torch.Tensor,
         camera,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """渲染一帧。
 
         Args:
@@ -88,8 +127,9 @@ class DifferentiableRenderer:
                 ``position``）。
 
         Returns:
-            ``(rgb, mask)`` —
-            ``rgb`` 形状 ``[1, H, W, 3]``，``mask`` 形状 ``[1, H, W]``。
+            ``(rgb, mask, interp_normals)`` —
+            ``rgb`` 形状 ``[1, H, W, 3]``，``mask`` 形状 ``[1, H, W]``，
+            ``interp_normals`` 形状 ``[1, H, W, 3]``。
         """
         dr = _get_dr()
         h = w = self.resolution
@@ -113,6 +153,13 @@ class DifferentiableRenderer:
 
         # ---- 5. 插值世界坐标 ----
         world_pos, _ = dr.interpolate(self.vertices, rast, self.faces)  # [1, H, W, 3]
+
+        # ---- 5b. 插值法线 ----
+        if self.normals is not None and self.normal_idx is not None:
+            interp_normals, _ = dr.interpolate(self.normals, rast, self.normal_idx)
+            interp_normals = interp_normals / (interp_normals.norm(dim=-1, keepdim=True) + 1e-8)
+        else:
+            interp_normals = torch.zeros_like(world_pos)
 
         # ---- 6. 视角方向 ----
         cam_pos = (
@@ -153,4 +200,4 @@ class DifferentiableRenderer:
         # ---- 10. 应用遮罩 ----
         rgb = rgb * mask.unsqueeze(-1)  # [1, H, W, 3]
 
-        return rgb, mask
+        return rgb, mask, interp_normals

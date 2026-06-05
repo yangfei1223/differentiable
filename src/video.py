@@ -207,11 +207,11 @@ def render_video(
     # ---- 5. 逐帧渲染 ----
     for i, cam in enumerate(cameras):
         with torch.no_grad():
-            rgb, mask = renderer.render(dc_param, rest_param, cam)  # [1, H, W, 3]
+            rgb, mask, _ = renderer.render(dc_param, rest_param, cam)  # [1, H, W, 3]
 
             # 减去 subtract_texture 的渲染结果
             if sub_dc_param is not None:
-                rgb_sub, _ = renderer.render(sub_dc_param, sub_rest_param, cam)
+                rgb_sub, _, _ = renderer.render(sub_dc_param, sub_rest_param, cam)
                 rgb = (rgb - rgb_sub).clamp(0.0, 1.0)
 
         # [1, H, W, 3] → [H, W, 3] numpy uint8

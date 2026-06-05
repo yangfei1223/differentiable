@@ -27,7 +27,7 @@ for i in range(3):
 
     # Render
     with torch.no_grad():
-        rgb, mask = renderer.render(sh_param, cam)
+        rgb, mask, _ = renderer.render(sh_param, cam)
     render_np = rgb[0].cpu().flip(0).clamp(0, 1).numpy()
     render_np = (render_np * 255).astype(np.uint8)
     render_np = cv2.cvtColor(render_np, cv2.COLOR_RGB2BGR)

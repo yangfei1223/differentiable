@@ -78,10 +78,11 @@ def test_render_output_shape():
     camera = _make_camera()
 
     features_dc, features_rest = _make_sh_params()
-    rgb, mask = renderer.render(features_dc, features_rest, camera)
+    rgb, mask, normals = renderer.render(features_dc, features_rest, camera)
 
     assert rgb.shape == (1, 64, 64, 3), f"rgb shape = {rgb.shape}"
     assert mask.shape == (1, 64, 64), f"mask shape = {mask.shape}"
+    assert normals.shape == (1, 64, 64, 3), f"normals shape = {normals.shape}"
     assert mask[0, 32, 32] > 0, "中心像素 mask 应 > 0（quad 可见）"
 
 
@@ -95,7 +96,7 @@ def test_render_gradient_flows():
     camera = _make_camera()
 
     features_dc, features_rest = _make_sh_params()
-    rgb, mask = renderer.render(features_dc, features_rest, camera)
+    rgb, mask, _ = renderer.render(features_dc, features_rest, camera)
 
     loss = rgb.sum()
     loss.backward()
@@ -119,7 +120,7 @@ def test_render_dc_color_correct():
     # order 0: features_rest should be empty [1, H, W, 0]
     assert features_rest.shape[-1] == 0
 
-    rgb, mask = renderer.render(features_dc, features_rest, camera)
+    rgb, mask, _ = renderer.render(features_dc, features_rest, camera)
 
     # 3DGS: DC stores (init_dc - 0.5) / C0
     # SH eval: C0 * dc_coeff + 0.5 = C0 * (init_dc-0.5)/C0 + 0.5 = init_dc

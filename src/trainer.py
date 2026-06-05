@@ -267,7 +267,7 @@ class Trainer:
                 gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1, 3, H_gt, W_gt]
 
                 # 渲染
-                rendered, mask = self.renderer.render(
+                rendered, mask, _ = self.renderer.render(
                     self.features_dc, self.features_rest, camera,
                 )  # [1, H, W, 3], [1, H, W]
 
@@ -308,7 +308,7 @@ class Trainer:
             with torch.no_grad():
                 _img, _cam = self.dataset[0]
                 _gt = torch.from_numpy(_img).unsqueeze(0).to(self.device)
-                _rendered, _mask = self.renderer.render(
+                _rendered, _mask, _ = self.renderer.render(
                     self.features_dc, self.features_rest, _cam,
                 )
                 _rendered = _rendered.flip(1)
@@ -413,8 +413,8 @@ class Trainer:
 
             # 渲染 2 个版本：Full 和 DC only
             with torch.no_grad():
-                rgb_full, mask = self.renderer.render(self.features_dc, self.features_rest, camera)
-                rgb_dc, _ = self.renderer.render(dc_only, rest_data * 0, camera)
+                rgb_full, mask, _ = self.renderer.render(self.features_dc, self.features_rest, camera)
+                rgb_dc, _, _ = self.renderer.render(dc_only, rest_data * 0, camera)
 
             # 高频净贡献 = Full - DC（可能有负值，clamp 到 [0,1]）
             rgb_hf = (rgb_full - rgb_dc).clamp(0, 1)
