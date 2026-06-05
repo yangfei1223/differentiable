@@ -47,21 +47,22 @@ class PBRLogger(ShadingLogger):
         mesh = load_mesh(self.config.data.mesh_path)
         cfg = self.config
         vk = dict(
-            mesh=mesh, center=cfg.video.center, radius=cfg.video.radius,
+            center=cfg.video.center, radius=cfg.video.radius,
             height=cfg.video.height, num_frames=cfg.video.num_frames,
             fov_deg=cfg.video.fov_deg, resolution=cfg.video.resolution, fps=cfg.video.fps,
         )
 
         # Full PBR
-        render_video(shading_model=model, output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
+        render_video(mesh=mesh, shading_model=model,
+                     output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
 
         # Diffuse only: 置零 specular (metallic=0, roughness=1)
-        self._render_component_video(model, renderer, mesh, output_dir, "orbit_diffuse.mp4",
-                                     mode="diffuse", **vk)
+        self.render_component_video(model, mesh, output_dir, "orbit_diffuse.mp4",
+                                    mode="diffuse", **vk)
 
         # Specular only: 置零 diffuse (metallic=1)
-        self._render_component_video(model, renderer, mesh, output_dir, "orbit_specular.mp4",
-                                     mode="specular", **vk)
+        self.render_component_video(model, mesh, output_dir, "orbit_specular.mp4",
+                                    mode="specular", **vk)
 
         print(f"  [Debug] compare + textures + video → {output_dir}")
 
@@ -114,7 +115,7 @@ class PBRLogger(ShadingLogger):
             ], axis=0)
             cv2.imwrite(os.path.join(output_dir, f"compare_{ci:04d}.png"), canvas)
 
-    def _render_component_video(self, model, renderer, mesh, output_dir, filename, mode, **vk):
+    def render_component_video(self, model, mesh, output_dir, filename, mode, **vk):
         """渲染 diffuse/specular 单分量视频。
 
         临时修改模型材质，渲染后恢复。
@@ -139,6 +140,6 @@ class PBRLogger(ShadingLogger):
         model.mat_texture = nn.Parameter(override)
         try:
             from src.video import render_video
-            render_video(shading_model=model, output_path=os.path.join(output_dir, filename), **vk)
+            render_video(mesh=mesh, shading_model=model, output_path=os.path.join(output_dir, filename), **vk)
         finally:
             model.mat_texture = nn.Parameter(orig_mat)

@@ -107,20 +107,32 @@ def main():
         video_cfg = cfg.video
         video_path = str(output_base / "orbit.mp4")
 
-        logger.info(f"  分辨率: {video_cfg.resolution}, 帧数: {video_cfg.num_frames}, FPS: {video_cfg.fps}")
-        render_video(
-            mesh=mesh,
-            output_path=video_path,
-            shading_model=model,
-            center=video_cfg.center,
-            radius=video_cfg.radius,
-            height=video_cfg.height,
-            num_frames=video_cfg.num_frames,
-            fov_deg=video_cfg.fov_deg,
-            resolution=video_cfg.resolution,
-            fps=video_cfg.fps,
+        vk = dict(
+            center=video_cfg.center, radius=video_cfg.radius,
+            height=video_cfg.height, num_frames=video_cfg.num_frames,
+            fov_deg=video_cfg.fov_deg, resolution=video_cfg.resolution, fps=video_cfg.fps,
         )
+
+        logger.info(f"  分辨率: {video_cfg.resolution}, 帧数: {video_cfg.num_frames}, FPS: {video_cfg.fps}")
+
+        # Full video
+        render_video(mesh=mesh, output_path=video_path, shading_model=model, **vk)
         logger.info(f"视频已导出: {video_path}")
+
+        # PBR: diffuse / specular 分量视频
+        if cfg.render_mode == "pbr":
+            from src.shading.pbr_logger import PBRLogger
+            pbr_logger = PBRLogger(cfg)
+            pbr_logger.render_component_video(
+                model, mesh, str(output_base), "orbit_diffuse.mp4",
+                mode="diffuse", **vk,
+            )
+            logger.info(f"Diffuse 视频已导出: {output_base / 'orbit_diffuse.mp4'}")
+            pbr_logger.render_component_video(
+                model, mesh, str(output_base), "orbit_specular.mp4",
+                mode="specular", **vk,
+            )
+            logger.info(f"Specular 视频已导出: {output_base / 'orbit_specular.mp4'}")
 
     logger.info("完成。")
 
