@@ -164,7 +164,7 @@ def render_video(
     )
 
     # ---- 3. 创建渲染器 ----
-    verts, faces, uvs, uv_idx, normals, normal_idx = mesh.to_torch()
+    verts, faces, uvs, uv_idx, normals, normal_idx, tangents, bitangents = mesh.to_torch()
     renderer = DifferentiableRenderer(
         vertices=verts,
         faces=faces,
@@ -172,6 +172,8 @@ def render_video(
         uv_idx=uv_idx,
         normals=normals,
         normal_idx=normal_idx,
+        tangents=tangents,
+        bitangents=bitangents,
         resolution=resolution,
         device=device,
     )
@@ -215,7 +217,7 @@ def render_video(
         with torch.no_grad():
             if shading_model is not None:
                 # New path: use ShadingModel
-                rast, texc, wpos, interp_normals, vdirs = renderer.rasterize_and_interpolate(cam)
+                rast, texc, wpos, interp_normals, vdirs, tang, btan = renderer.rasterize_and_interpolate(cam)
                 rgb, mask = shading_model.shade(rast, texc, wpos, interp_normals, vdirs, cam, resolution)
             else:
                 # Legacy path: use sh_texture directly

@@ -114,7 +114,7 @@ class TestTorchConversion:
 
     def test_dtypes(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi, n, ni = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         assert v.dtype == torch.float32
         assert f.dtype == torch.int64
@@ -123,7 +123,7 @@ class TestTorchConversion:
 
     def test_values_match(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi, n, ni = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         np.testing.assert_allclose(v.numpy(), mesh.vertices.astype(np.float32), atol=1e-6)
         np.testing.assert_array_equal(f.numpy(), mesh.faces)
@@ -132,7 +132,7 @@ class TestTorchConversion:
 
     def test_no_grad(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi, n, ni = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         assert not v.requires_grad
         assert not f.requires_grad

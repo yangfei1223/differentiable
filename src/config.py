@@ -13,8 +13,8 @@ class PBRConfig:
     n_mip_levels: int = 5
     brdf_lut_size: int = 256
     env_lr_ratio: float = 1.0
-    env_tv_weight: float = 0.01
-    env_l2_weight: float = 0.001
+    env_tv_weight: float = 0.0005
+    env_l2_weight: float = 0.0001
     init_env_map: Optional[str] = None
 
 

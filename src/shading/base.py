@@ -25,6 +25,8 @@ class ShadingModel:
         view_dirs: torch.Tensor,
         camera,
         resolution: int,
+        tangents: torch.Tensor | None = None,
+        bitangents: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 

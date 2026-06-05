@@ -16,7 +16,7 @@ def test_default_config_has_pbr():
     assert cfg.pbr.n_mip_levels == 5
     assert cfg.pbr.brdf_lut_size == 256
     assert cfg.pbr.env_lr_ratio == 1.0
-    assert cfg.pbr.env_tv_weight == 0.01
+    assert cfg.pbr.env_tv_weight == 0.0005
     assert cfg.pbr.init_env_map is None
 
 

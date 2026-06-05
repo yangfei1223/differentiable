@@ -36,6 +36,8 @@ class DifferentiableRenderer:
         uv_idx: torch.Tensor,
         normals: torch.Tensor = None,
         normal_idx: torch.Tensor = None,
+        tangents: torch.Tensor = None,
+        bitangents: torch.Tensor = None,
         resolution: int = 512,
         device: str = "cuda",
     ):
@@ -67,6 +69,15 @@ class DifferentiableRenderer:
         else:
             self.normal_idx = None
 
+        if tangents is not None:
+            self.tangents = tangents.to(device).float()
+        else:
+            self.tangents = None
+        if bitangents is not None:
+            self.bitangents = bitangents.to(device).float()
+        else:
+            self.bitangents = None
+
         # nvdiffrast GL 上下文
         self.glctx = dr.RasterizeGLContext()
 
@@ -75,11 +86,11 @@ class DifferentiableRenderer:
     # ------------------------------------------------------------------
     def rasterize_and_interpolate(
         self, camera
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """光栅化 + 插值，返回中间结果供着色模型使用。
 
         Returns:
-            (rast_out, texc, world_pos, interp_normals, view_dirs)
+            (rast_out, texc, world_pos, interp_normals, view_dirs, interp_tangents, interp_bitangents)
         """
         dr = _get_dr()
         h = w = self.resolution
@@ -107,7 +118,17 @@ class DifferentiableRenderer:
         view_dirs = cam_pos - world_pos
         view_dirs = view_dirs / (view_dirs.norm(dim=-1, keepdim=True) + 1e-8)
 
-        return rast, texc, world_pos, interp_normals, view_dirs
+        # 插值切线/副切线
+        if self.tangents is not None and self.bitangents is not None:
+            interp_tangents, _ = dr.interpolate(self.tangents, rast, self.faces)
+            interp_tangents = interp_tangents / (interp_tangents.norm(dim=-1, keepdim=True) + 1e-8)
+            interp_bitangents, _ = dr.interpolate(self.bitangents, rast, self.faces)
+            interp_bitangents = interp_bitangents / (interp_bitangents.norm(dim=-1, keepdim=True) + 1e-8)
+        else:
+            interp_tangents = torch.zeros_like(view_dirs)
+            interp_bitangents = torch.zeros_like(view_dirs)
+
+        return rast, texc, world_pos, interp_normals, view_dirs, interp_tangents, interp_bitangents
 
     # ------------------------------------------------------------------
     # render

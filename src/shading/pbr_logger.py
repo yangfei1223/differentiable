@@ -77,7 +77,7 @@ class PBRLogger(ShadingLogger):
             img_np, camera = dataset[idx]
 
             with torch.no_grad():
-                rast, texc, wpos, inorm, vdir = renderer.rasterize_and_interpolate(camera)
+                rast, texc, wpos, inorm, vdir, tang, btan = renderer.rasterize_and_interpolate(camera)
                 rgb_full, mask = model.shade(rast, texc, wpos, inorm, vdir, camera, resolution)
 
             debug = model.get_debug_info()

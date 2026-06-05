@@ -36,7 +36,7 @@ class Trainer:
 
         # ---- 1. 加载网格 ----
         mesh = load_mesh(config.data.mesh_path)
-        self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx = mesh.to_torch()
+        self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = mesh.to_torch()
 
         # ---- 2. 创建数据集 ----
         self.dataset = GTDataset(
@@ -105,6 +105,8 @@ class Trainer:
             uv_idx=self.uv_idx,
             normals=self.normals,
             normal_idx=self.normal_idx,
+            tangents=self.tangents,
+            bitangents=self.bitangents,
             resolution=resolution,
             device=self.device,
         )
@@ -254,8 +256,8 @@ class Trainer:
                         self.model.features_dc, self.model.features_rest, camera,
                     )
                 else:
-                    rast, texc, wpos, interp_normals, vdirs = self.renderer.rasterize_and_interpolate(camera)
-                    rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution)
+                    rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
+                    rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
 
                 # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，垂直翻转到图像坐标 (原点左上)
                 rendered = rendered.flip(1)
@@ -309,8 +311,8 @@ class Trainer:
                         self.model.features_dc, self.model.features_rest, _cam,
                     )
                 else:
-                    _rast, _texc, _wpos, _inorm, _vdir = self.renderer.rasterize_and_interpolate(_cam)
-                    _rendered, _mask = self.model.shade(_rast, _texc, _wpos, _inorm, _vdir, _cam, self.current_resolution)
+                    _rast, _texc, _wpos, _inorm, _vdir, _tang, _btang = self.renderer.rasterize_and_interpolate(_cam)
+                    _rendered, _mask = self.model.shade(_rast, _texc, _wpos, _inorm, _vdir, _cam, self.current_resolution, _tang, _btang)
                 _rendered = _rendered.flip(1)
                 _mask = _mask.flip(1)
                 _gt_hw = _gt.permute(0, 1, 2, 3)

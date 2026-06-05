@@ -25,8 +25,10 @@ class MeshData:
     faces: np.ndarray
     uvs: np.ndarray
     uv_idx: np.ndarray
-    normals: np.ndarray = None           # 顶点法线 [N, 3]
+    normals: np.ndarray = None           # 顶点法线 [Nn, 3]
     normal_idx: np.ndarray = None        # 面-法线索引 [M, 3]
+    tangents: np.ndarray = None          # 顶点切线 [Nn, 3]
+    bitangents: np.ndarray = None        # 顶点副切线 [Nn, 3]
 
     # ------------------------------------------------------------------
     # Properties
@@ -71,13 +73,78 @@ class MeshData:
         vertex_normals = vertex_normals / norms
         return vertex_normals
 
+    def compute_vertex_tangents(self) -> Tuple[np.ndarray, np.ndarray]:
+        """计算顶点切线和副切线 (Mikktspace 风格)。
+
+        根据三角形边和 UV 差值计算面切线，再面积加权平均到顶点。
+        正交化到法线后，副切线通过 cross(normal, tangent) 重建。
+
+        Returns:
+            (tangents, bitangents) — 各为 [N, 3] 单位向量。
+        """
+        if self.uvs.shape[0] == 0:
+            raise ValueError("网格无 UV 坐标，无法计算切线")
+
+        tangents = np.zeros((len(self.vertices), 3), dtype=np.float64)
+        bitangents = np.zeros((len(self.vertices), 3), dtype=np.float64)
+
+        for fi in range(len(self.faces)):
+            vi0, vi1, vi2 = self.faces[fi]
+            ui0, ui1, ui2 = self.uv_idx[fi]
+
+            p0, p1, p2 = self.vertices[vi0], self.vertices[vi1], self.vertices[vi2]
+            uv0, uv1, uv2 = self.uvs[ui0], self.uvs[ui1], self.uvs[ui2]
+
+            e1 = p1 - p0
+            e2 = p2 - p0
+            du1 = uv1[0] - uv0[0]
+            dv1 = uv1[1] - uv0[1]
+            du2 = uv2[0] - uv0[0]
+            dv2 = uv2[1] - uv0[1]
+
+            det = du1 * dv2 - du2 * dv1
+            if abs(det) < 1e-10:
+                continue
+
+            invdet = 1.0 / det
+            face_tangent = (dv2 * e1 - dv1 * e2) * invdet
+            face_bitangent = (-du2 * e1 + du1 * e2) * invdet
+
+            # 面积加权累积
+            area = np.linalg.norm(np.cross(e1, e2)) * 0.5
+            for vi in (vi0, vi1, vi2):
+                tangents[vi] += face_tangent * area
+                bitangents[vi] += face_bitangent * area
+
+        # 正交化到法线，重建 bitangent
+        for i in range(len(self.vertices)):
+            n = self.normals[i]
+            t = tangents[i]
+
+            # Gram-Schmidt: 去掉 tangent 中与法线平行的分量
+            t = t - np.dot(t, n) * n
+            tn = np.linalg.norm(t)
+            if tn > 1e-10:
+                t /= tn
+            else:
+                # 退化时用任意与 n 垂直的方向
+                ref = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+                t = np.cross(n, ref)
+                t /= np.linalg.norm(t)
+
+            tangents[i] = t
+            # bitangent = cross(normal, tangent) 确保右手系
+            bitangents[i] = np.cross(n, t)
+
+        return tangents, bitangents
+
     def to_torch(
         self,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """将网格数据转换为 PyTorch 张量。
 
         Returns:
-            (vertices, faces, uvs, uv_idx, normals, normal_idx)
+            (vertices, faces, uvs, uv_idx, normals, normal_idx, tangents, bitangents)
         """
         v = torch.from_numpy(self.vertices.astype(np.float32))
         f = torch.from_numpy(self.faces.astype(np.int64))
@@ -89,7 +156,13 @@ class MeshData:
         else:
             n = torch.zeros_like(v)
             ni = torch.zeros_like(f)
-        return v, f, uv, uvi, n, ni
+        if self.tangents is not None:
+            t = torch.from_numpy(self.tangents.astype(np.float32))
+            bt = torch.from_numpy(self.bitangents.astype(np.float32))
+        else:
+            t = torch.zeros_like(v)
+            bt = torch.zeros_like(v)
+        return v, f, uv, uvi, n, ni, t, bt
 
 
 def load_mesh(path: str | Path) -> MeshData:
@@ -144,5 +217,12 @@ def load_mesh(path: str | Path) -> MeshData:
                         normals=np.zeros_like(vertices), normal_idx=normal_idx)
         normals = temp.compute_vertex_normals()
 
-    return MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx,
-                    normals=normals, normal_idx=normal_idx)
+    mesh_data = MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx,
+                         normals=normals, normal_idx=normal_idx)
+
+    # 计算切线
+    tangents, bitangents = mesh_data.compute_vertex_tangents()
+    mesh_data.tangents = tangents
+    mesh_data.bitangents = bitangents
+
+    return mesh_data

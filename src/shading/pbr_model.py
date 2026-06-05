@@ -48,6 +48,8 @@ class PBRShadingModel(ShadingModel):
         view_dirs: torch.Tensor,
         camera,
         resolution: int,
+        tangents: torch.Tensor | None = None,
+        bitangents: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """PBR split-sum 着色。"""
         import nvdiffrast.torch as dr
@@ -58,12 +60,19 @@ class PBRShadingModel(ShadingModel):
         )
         base_color, roughness, metallic, _ = decode_material(mat_raw)
 
-        # 2. 采样法线贴图 → 替代插值顶点法线
+        # 2. 采样法线贴图 → tangent → world 变换
         tex_normal_raw = dr.texture(
             self.mat_texture, texc, filter_mode="linear", boundary_mode="clamp"
         )
         _, _, _, tex_normal = decode_material(tex_normal_raw)
-        normals = tex_normal  # [1, H, W, 3] 单位向量
+        # tex_normal: [1, H, W, 3] tangent-space 单位向量，(0,0,1)=无扰动
+        if tangents is not None and bitangents is not None:
+            world_normal = (
+                tangents * tex_normal[..., 0:1] +
+                bitangents * tex_normal[..., 1:2] +
+                normals * tex_normal[..., 2:3]
+            )
+            normals = F.normalize(world_normal, dim=-1)
 
         # 3. 计算反射方向
         NdotV = (normals * view_dirs).sum(dim=-1, keepdim=True).clamp(0, 1)
