@@ -18,20 +18,20 @@ def init_env_map(height: int, width: int, init_image: torch.Tensor | None = None
         init_image: 可选初始图像 [1, H, W, 3]。None 则用均匀灰色。
 
     Returns:
-        nn.Parameter [1, H, W, 3]（存储为 raw 值，经 sigmoid 解码后为 [0, 1]）
+        nn.Parameter [1, H, W, 3]（存储为 raw 值，经 softplus 解码后为 HDR ≥ 0）
     """
     if init_image is not None:
         data = init_image.clone().float()
     else:
-        # 均匀灰色 0.5, sigmoid(0) = 0.5
-        data = torch.zeros(1, height, width, 3)
+        # 均匀灰色 0.5 → softplus_inv(0.5) = log(exp(0.5)-1) ≈ -0.193
+        data = torch.ones(1, height, width, 3) * (math.log(math.exp(0.5) - 1.0 + 1e-6))
 
     return nn.Parameter(data)
 
 
 def _decode_env_map(raw: torch.Tensor) -> torch.Tensor:
-    """sigmoid 约束，值域严格 [0, 1]，防止 env_map 爆炸。"""
-    return torch.sigmoid(raw)
+    """softplus 约束保证 HDR 非负。配合 L2 正则化防止值爆炸。"""
+    return F.softplus(raw)
 
 
 def direction_to_equirect(dirs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

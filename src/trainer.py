@@ -274,11 +274,16 @@ class Trainer:
                 tex_for_loss = self.model.get_material_texture().to(self.device)
                 loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
-                # PBR: 环境贴图 TV 正则化，防止 env_map 值爆炸
+                # PBR: 环境贴图正则化（TV + L2 防止 HDR 值爆炸）
                 if self.config.render_mode == "pbr":
                     from src.losses import tv_loss
+                    from src.shading.pbr.env_map import _decode_env_map
+                    # TV: 平滑性
                     env_tv = tv_loss(self.model.env_map) * self.config.pbr.env_tv_weight
-                    loss = loss + env_tv
+                    # L2: 防止 softplus 解码后的值过大
+                    env_decoded = _decode_env_map(self.model.env_map)
+                    env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+                    loss = loss + env_tv + env_l2
 
                 # 反向传播 & 更新
                 loss.backward()
