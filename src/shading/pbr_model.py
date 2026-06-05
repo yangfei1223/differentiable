@@ -40,8 +40,8 @@ class PBRShadingModel(ShadingModel):
         pbr_cfg = self.config.pbr
         eh, ew = pbr_cfg.env_map_res
 
-        self.mat_texture = init_material_texture(resolution).to(self.device)
-        self.env_map = init_env_map(eh, ew).to(self.device)
+        self.mat_texture = nn.Parameter(init_material_texture(resolution).data.to(self.device))
+        self.env_map = nn.Parameter(init_env_map(eh, ew).data.to(self.device))
 
     def shade(
         self,
