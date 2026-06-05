@@ -4,8 +4,6 @@ from src.shading.pbr.env_map import (
     init_env_map,
     direction_to_equirect,
     sample_env_map,
-    prefilter_env_map,
-    sample_prefiltered,
 )
 
 
@@ -38,36 +36,30 @@ def test_direction_to_equirect_gradient():
     assert dirs.grad is not None
 
 
-def test_sample_env_map():
-    env = init_env_map(16, 32)
-    dirs = torch.tensor([[0.0, 0.0, 1.0]])
+def test_sample_env_map_basic():
+    """无 mip level 时直接采样（linear）。"""
+    env = init_env_map(16, 32).cuda()
+    dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
     color = sample_env_map(env, dirs)
     assert color.shape == (1, 3)
 
 
-def test_prefilter_env_map_shape():
-    env = init_env_map(16, 32)
-    n_levels = 5
-    prefiltered = prefilter_env_map(env, n_levels=n_levels)
-    assert prefiltered.shape[0] == 1
-    assert prefiltered.shape[1] == n_levels
-    assert prefiltered.shape[2] == 16
-    assert prefiltered.shape[3] == 32
-    assert prefiltered.shape[4] == 3
+def test_sample_env_map_with_mip():
+    """带 mip_level_bias 时使用 nvdiffrast mipmap。"""
+    env = init_env_map(32, 64).cuda()
+    dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+    roughness = torch.tensor([[0.5]]).cuda()
+    color = sample_env_map(env, dirs, mip_level_bias=roughness)
+    assert color.shape == (1, 3)
 
 
-def test_prefilter_env_map_gradient():
-    env = init_env_map(16, 32)
-    prefiltered = prefilter_env_map(env, n_levels=3)
-    loss = prefiltered.sum()
+def test_sample_env_map_gradient():
+    """采样可导。"""
+    import torch.nn as nn
+    raw = init_env_map(16, 32)
+    env = nn.Parameter(raw.data.cuda())  # 确保是 leaf tensor
+    dirs = torch.tensor([[0.0, 0.0, 1.0]]).cuda()
+    color = sample_env_map(env, dirs)
+    loss = color.sum()
     loss.backward()
     assert env.grad is not None
-
-
-def test_sample_prefiltered():
-    env = init_env_map(16, 32)
-    prefiltered = prefilter_env_map(env, n_levels=5)
-    dirs = torch.tensor([[0.0, 0.0, 1.0]])
-    roughness = torch.tensor([[0.5]])
-    color = sample_prefiltered(prefiltered, dirs, roughness, n_levels=5)
-    assert color.shape == (1, 3)

@@ -98,4 +98,4 @@ def test_pbr_model_env_map_shape():
     model = PBRShadingModel(cfg)
     model.init_textures(16)
     env = model.env_map.data.detach().cpu()
-    assert env.shape == (1, 64, 128, 3)
+    assert env.shape == (1, 256, 512, 3)

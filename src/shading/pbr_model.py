@@ -1,6 +1,7 @@
 """PBR 着色模型 — Split-Sum 近似。"""
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -12,8 +13,9 @@ from src.shading.base import ShadingModel
 from src.shading.pbr.material import init_material_texture, decode_material, compute_F0
 from src.shading.pbr.env_map import (
     init_env_map,
-    prefilter_env_map,
-    sample_prefiltered,
+    _decode_env_map,
+    _compute_max_mip_level,
+    sample_env_map,
 )
 from src.shading.pbr.brdf_lut import generate_brdf_lut, sample_brdf
 
@@ -67,17 +69,21 @@ class PBRShadingModel(ShadingModel):
         reflect_dir = 2.0 * NdotV * normals - view_dirs
         reflect_dir = reflect_dir / (reflect_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
-        # 3. 预滤波环境贴图
-        prefiltered = prefilter_env_map(self.env_map, self.n_mip_levels)
+        # 3. 环境贴图分辨率 → max mip level
+        env_decoded = _decode_env_map(self.env_map)
+        H, W = env_decoded.shape[1], env_decoded.shape[2]
+        max_mip = _compute_max_mip_level(H, W)
 
-        # 4. Diffuse 项
-        irradiance = sample_prefiltered(prefiltered, normals, torch.zeros_like(NdotV), self.n_mip_levels)
+        # 4. Diffuse 项 — 采样最模糊的 mip level (近似 cosine hemisphere integral)
+        diffuse_bias = torch.full_like(NdotV, float(max_mip))
+        irradiance = sample_env_map(self.env_map, normals, mip_level_bias=diffuse_bias)
         F0 = compute_F0(base_color, metallic)
         kd = (1.0 - metallic) * (1.0 - F0)
         diffuse = kd * base_color * irradiance
 
-        # 5. Specular 项
-        prefiltered_color = sample_prefiltered(prefiltered, reflect_dir, roughness, self.n_mip_levels)
+        # 5. Specular 项 — roughness 决定 mip level
+        specular_bias = roughness * max_mip
+        prefiltered_color = sample_env_map(self.env_map, reflect_dir, mip_level_bias=specular_bias)
         NdotV_flat = NdotV.reshape(-1)
         roughness_flat = roughness.reshape(-1)
         scale, bias = sample_brdf(self.brdf_lut.to(self.device), NdotV_flat, roughness_flat)

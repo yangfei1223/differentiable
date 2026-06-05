@@ -9,7 +9,7 @@ from typing import List, Optional
 
 @dataclass
 class PBRConfig:
-    env_map_res: list = field(default_factory=lambda: [64, 128])
+    env_map_res: list = field(default_factory=lambda: [256, 512])
     n_mip_levels: int = 5
     brdf_lut_size: int = 256
     env_lr_ratio: float = 1.0

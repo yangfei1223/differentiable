@@ -274,6 +274,12 @@ class Trainer:
                 tex_for_loss = self.model.get_material_texture().to(self.device)
                 loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
+                # PBR: 环境贴图 TV 正则化，防止 env_map 值爆炸
+                if self.config.render_mode == "pbr":
+                    from src.losses import tv_loss
+                    env_tv = tv_loss(self.model.env_map) * self.config.pbr.env_tv_weight
+                    loss = loss + env_tv
+
                 # 反向传播 & 更新
                 loss.backward()
                 self.optimizer.step()

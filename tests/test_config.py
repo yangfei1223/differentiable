@@ -12,7 +12,7 @@ def test_default_config_has_render_mode():
 def test_default_config_has_pbr():
     cfg = Config()
     assert isinstance(cfg.pbr, PBRConfig)
-    assert cfg.pbr.env_map_res == [64, 128]
+    assert cfg.pbr.env_map_res == [256, 512]
     assert cfg.pbr.n_mip_levels == 5
     assert cfg.pbr.brdf_lut_size == 256
     assert cfg.pbr.env_lr_ratio == 1.0
