@@ -70,13 +70,13 @@ class PBRShadingModel(ShadingModel):
         reflect_dir = reflect_dir / (reflect_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
         # 3. 环境贴图分辨率 → max mip level
+        #    限制到 5 级 (256×512 → 最低 ~8×16)，避免 box filter mipmap 块状
         env_decoded = _decode_env_map(self.env_map)
         H, W = env_decoded.shape[1], env_decoded.shape[2]
-        max_mip = _compute_max_mip_level(H, W)
+        max_mip = min(_compute_max_mip_level(H, W), 5)
 
-        # 4. Diffuse 项 — 用 80% max_mip 采样（保留方向性的同时足够模糊）
-        #    max_mip = 1×1 全局平均（无方向信息），80% ≈ 4×8（方向相关 irradiance）
-        diffuse_bias = torch.full_like(NdotV, float(max_mip) * 0.8)
+        # 4. Diffuse 项 — 用 max_mip 采样（最模糊级别 ≈ cosine hemisphere 平均）
+        diffuse_bias = torch.full_like(NdotV, float(max_mip))
         irradiance = sample_env_map(self.env_map, normals, mip_level_bias=diffuse_bias)
         F0 = compute_F0(base_color, metallic)
         kd = (1.0 - metallic) * (1.0 - F0)

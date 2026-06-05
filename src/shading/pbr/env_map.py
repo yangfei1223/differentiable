@@ -85,7 +85,7 @@ def sample_env_map(env_map: torch.Tensor, dirs: torch.Tensor, mip_level_bias: to
 
     kwargs = dict(
         filter_mode="linear",
-        boundary_mode="clamp",
+        boundary_mode="wrap",
     )
 
     if mip_level_bias is not None:
