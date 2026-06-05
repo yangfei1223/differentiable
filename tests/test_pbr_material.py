@@ -9,7 +9,7 @@ from src.shading.pbr.material import (
 
 def test_init_material_texture_shape():
     tex = init_material_texture(64)
-    assert tex.shape == (1, 64, 64, 5)
+    assert tex.shape == (1, 64, 64, 8)
 
 
 def test_init_material_texture_is_parameter():
@@ -19,21 +19,32 @@ def test_init_material_texture_is_parameter():
 
 def test_decode_material_base_color_range():
     tex = init_material_texture(32)
-    base_color, roughness, metallic = decode_material(tex)
+    base_color, roughness, metallic, normal = decode_material(tex)
     assert base_color.min() >= 0.0
     assert base_color.max() <= 1.0
     assert roughness.min() >= 0.0
     assert roughness.max() <= 1.0
     assert metallic.min() >= 0.0
     assert metallic.max() <= 1.0
+    # normal decoded as unit vector (xyz in [-1, 1])
+    assert normal.min() >= -1.0
+    assert normal.max() <= 1.0
 
 
 def test_decode_material_shapes():
     tex = init_material_texture(16)
-    base_color, roughness, metallic = decode_material(tex)
+    base_color, roughness, metallic, normal = decode_material(tex)
     assert base_color.shape == (1, 16, 16, 3)
     assert roughness.shape == (1, 16, 16, 1)
     assert metallic.shape == (1, 16, 16, 1)
+    assert normal.shape == (1, 16, 16, 3)
+
+
+def test_decode_normal_magnitude():
+    tex = init_material_texture(32)
+    _, _, _, normal = decode_material(tex)
+    lengths = normal.norm(dim=-1)
+    assert torch.allclose(lengths, torch.ones_like(lengths), atol=1e-5)
 
 
 def test_compute_F0_dielectric():
@@ -52,8 +63,8 @@ def test_compute_F0_metallic():
 
 def test_material_gradient_flows():
     tex = init_material_texture(16)
-    base_color, roughness, metallic = decode_material(tex)
-    loss = base_color.sum() + roughness.sum() + metallic.sum()
+    base_color, roughness, metallic, normal = decode_material(tex)
+    loss = base_color.sum() + roughness.sum() + metallic.sum() + normal.sum()
     loss.backward()
     assert tex.grad is not None
     assert tex.grad.abs().sum() > 0

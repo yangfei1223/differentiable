@@ -56,9 +56,16 @@ class PBRShadingModel(ShadingModel):
         mat_raw = dr.texture(
             self.mat_texture, texc, filter_mode="linear", boundary_mode="clamp"
         )
-        base_color, roughness, metallic = decode_material(mat_raw)
+        base_color, roughness, metallic, _ = decode_material(mat_raw)
 
-        # 2. 计算反射方向
+        # 2. 采样法线贴图 → 替代插值顶点法线
+        tex_normal_raw = dr.texture(
+            self.mat_texture, texc, filter_mode="linear", boundary_mode="clamp"
+        )
+        _, _, _, tex_normal = decode_material(tex_normal_raw)
+        normals = tex_normal  # [1, H, W, 3] 单位向量
+
+        # 3. 计算反射方向
         NdotV = (normals * view_dirs).sum(dim=-1, keepdim=True).clamp(0, 1)
         reflect_dir = 2.0 * NdotV * normals - view_dirs
         reflect_dir = reflect_dir / (reflect_dir.norm(dim=-1, keepdim=True) + 1e-8)
@@ -93,6 +100,7 @@ class PBRShadingModel(ShadingModel):
             "base_color": base_color.detach(),
             "roughness": roughness.detach(),
             "metallic": metallic.detach(),
+            "normal": normals.detach(),
         }
 
         return rgb, mask
@@ -128,7 +136,7 @@ class PBRShadingModel(ShadingModel):
         os.makedirs(output_dir, exist_ok=True)
         paths = []
 
-        base_color, roughness, metallic = decode_material(self.mat_texture)
+        base_color, roughness, metallic, tex_normal = decode_material(self.mat_texture)
 
         # base_color.png
         bc = base_color[0].clamp(0, 1).pow(1.0 / 2.2).detach().cpu().numpy()
@@ -154,6 +162,13 @@ class PBRShadingModel(ShadingModel):
         # env_map.png
         p = os.path.join(output_dir, "env_map.png")
         self.env_map.export_image(p)
+        paths.append(p)
+
+        # normal_map.png — [-1,1] → [0,255]
+        n_img = tex_normal[0].detach().cpu().numpy()  # [H, W, 3], 值域 [-1, 1]
+        n_img = ((n_img + 1.0) * 0.5 * 255).clip(0, 255).astype(np.uint8)
+        p = os.path.join(output_dir, "normal_map.png")
+        Image.fromarray(n_img, "RGB").save(p)
         paths.append(p)
 
         return paths

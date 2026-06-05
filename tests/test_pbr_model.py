@@ -33,7 +33,7 @@ def test_pbr_model_mat_texture_shape():
     model = PBRShadingModel(cfg)
     model.init_textures(32)
     mat = model.get_material_texture()
-    assert mat.shape == (1, 32, 32, 5)
+    assert mat.shape == (1, 32, 32, 8)
 
 
 def test_pbr_model_state_dict():
@@ -80,7 +80,7 @@ def test_pbr_model_set_material_texture():
     model = PBRShadingModel(cfg)
     model.init_textures(16)
 
-    new_tex = torch.randn(1, 16, 16, 5)
+    new_tex = torch.randn(1, 16, 16, 8)
     model.set_material_texture(new_tex)
 
     retrieved = model.get_material_texture()
