@@ -15,6 +15,7 @@ from src.shading.pbr.env_map import (
     init_env_map,
     _decode_env_map,
     _compute_max_mip_level,
+    prefilter_mipmap,
     sample_env_map,
 )
 from src.shading.pbr.brdf_lut import generate_brdf_lut, sample_brdf
@@ -69,22 +70,22 @@ class PBRShadingModel(ShadingModel):
         reflect_dir = 2.0 * NdotV * normals - view_dirs
         reflect_dir = reflect_dir / (reflect_dir.norm(dim=-1, keepdim=True) + 1e-8)
 
-        # 3. 环境贴图分辨率 → max mip level
-        #    限制到 5 级 (256×512 → 最低 ~8×16)，避免 box filter mipmap 块状
+        # 3. 生成高斯预滤波 mipmap（可导，替代 nvdiffrast 内置 box filter）
         env_decoded = _decode_env_map(self.env_map)
         H, W = env_decoded.shape[1], env_decoded.shape[2]
-        max_mip = min(_compute_max_mip_level(H, W), 5)
+        max_mip = _compute_max_mip_level(H, W)
+        custom_mip = prefilter_mipmap(self.env_map, max_mip)
 
-        # 4. Diffuse 项 — 用 max_mip 采样（最模糊级别 ≈ cosine hemisphere 平均）
+        # 4. Diffuse 项 — max_mip level（最模糊的预滤波级）
         diffuse_bias = torch.full_like(NdotV, float(max_mip))
-        irradiance = sample_env_map(self.env_map, normals, mip_level_bias=diffuse_bias)
+        irradiance = sample_env_map(self.env_map, normals, mip_level_bias=diffuse_bias, custom_mip=custom_mip)
         F0 = compute_F0(base_color, metallic)
         kd = (1.0 - metallic) * (1.0 - F0)
         diffuse = kd * base_color * irradiance
 
         # 5. Specular 项 — roughness 决定 mip level
         specular_bias = roughness * max_mip
-        prefiltered_color = sample_env_map(self.env_map, reflect_dir, mip_level_bias=specular_bias)
+        prefiltered_color = sample_env_map(self.env_map, reflect_dir, mip_level_bias=specular_bias, custom_mip=custom_mip)
         NdotV_flat = NdotV.reshape(-1)
         roughness_flat = roughness.reshape(-1)
         scale, bias = sample_brdf(self.brdf_lut.to(self.device), NdotV_flat, roughness_flat)
