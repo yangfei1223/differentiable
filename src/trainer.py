@@ -8,7 +8,6 @@ from typing import List
 import numpy as np
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiStepLR
@@ -19,7 +18,6 @@ from src.losses import CombinedLoss
 from src.mesh import load_mesh
 from src.renderer import DifferentiableRenderer
 from src.seam_padding import dilate_texture
-from src.sh import init_sh_texture, cat_sh_features
 from src.utils import vis, vis_pair
 
 class Trainer:
@@ -32,7 +30,7 @@ class Trainer:
         config: 全局配置对象。
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, shading_model=None) -> None:
         self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -46,23 +44,16 @@ class Trainer:
             camera_path=config.data.camera_path,
         )
 
-        # ---- 3. 初始化 SH 纹理（3DGS 风格：DC 和高阶分开） ----
-        self.sh_order = config.texture.sh_order
-        _sh_dc, _sh_rest = init_sh_texture(
-            config.texture.base_resolution,
-            sh_order=self.sh_order,
-            init_dc=config.texture.init_dc_value,
-        )
-        # .to(device) 会破坏 leaf 状态, 需要重建 nn.Parameter
-        self.features_dc = nn.Parameter(_sh_dc.data.to(self.device))
-        self.features_rest = nn.Parameter(_sh_rest.data.to(self.device))
+        # ---- 3. 着色模型 ----
+        if shading_model is not None:
+            self.model = shading_model
+        else:
+            from src.shading import create_shading_model
+            self.model = create_shading_model(config.render_mode, config)
+        self.model.init_textures(config.texture.base_resolution)
 
-        # ---- 4. 优化器与调度器（3DGS: 高阶 lr = DC lr / 20） ----
-        base_lr = config.training.lr
-        self.optimizer = Adam([
-            {"params": [self.features_dc], "lr": base_lr, "name": "f_dc"},
-            {"params": [self.features_rest], "lr": base_lr * self.config.training.rest_lr_ratio, "name": "f_rest"},
-        ])
+        # ---- 4. 优化器 ----
+        self._rebuild_optimizer()
         self.scheduler = MultiStepLR(
             self.optimizer,
             milestones=config.training.lr_decay_epochs,
@@ -117,58 +108,41 @@ class Trainer:
     # ------------------------------------------------------------------
     # Texture manipulation
     # ------------------------------------------------------------------
-    def _resize_sh_texture(self, new_res: int) -> None:
-        """双线性插值将 SH 纹理缩放到 new_res，并重建优化器。"""
-        old_res = self.features_dc.shape[1]
+    def _rebuild_optimizer(self) -> None:
+        """根据 model.parameters() 重建优化器，保持特殊 lr 比例。"""
+        base_lr = self.config.training.lr
+        param_groups = []
+        for i, p in enumerate(self.model.parameters()):
+            if self.config.render_mode == "sh" and i == 1:
+                param_groups.append({"params": [p], "lr": base_lr * self.config.training.rest_lr_ratio})
+            elif self.config.render_mode == "pbr" and i == 1:
+                param_groups.append({"params": [p], "lr": base_lr * self.config.pbr.env_lr_ratio})
+            else:
+                param_groups.append({"params": [p], "lr": base_lr})
+        self.optimizer = Adam(param_groups)
+
+    def _resize_textures(self, new_res: int) -> None:
+        """双线性插值将材质纹理缩放到 new_res，并重建优化器。"""
+        old_res = self.model.get_material_texture().shape[1]
         if old_res == new_res:
             return
 
-        # Resize DC
-        tex = self.features_dc.data.permute(0, 3, 1, 2)  # [1, C, H, W]
+        tex = self.model.get_material_texture().to(self.device)
+        tex = tex.permute(0, 3, 1, 2)
         tex = F.interpolate(tex, size=(new_res, new_res), mode="bilinear", align_corners=False)
-        tex = tex.permute(0, 2, 3, 1)  # [1, H, W, C]
-        self.features_dc = nn.Parameter(tex.contiguous())
-
-        # Resize Rest (可能为空通道，跳过)
-        if self.features_rest.shape[-1] > 0:
-            tex_r = self.features_rest.data.permute(0, 3, 1, 2)
-            tex_r = F.interpolate(tex_r, size=(new_res, new_res), mode="bilinear", align_corners=False)
-            tex_r = tex_r.permute(0, 2, 3, 1)
-            self.features_rest = nn.Parameter(tex_r.contiguous())
-        else:
-            # 仅更新 spatial size，保持 0 通道
-            self.features_rest = nn.Parameter(
-                torch.zeros(1, new_res, new_res, 0, device=self.device)
-            )
-
-        # 重建优化器和调度器
-        base_lr = self.config.training.lr
-        self.optimizer = Adam([
-            {"params": [self.features_dc], "lr": base_lr, "name": "f_dc"},
-            {"params": [self.features_rest], "lr": base_lr * self.config.training.rest_lr_ratio, "name": "f_rest"},
-        ])
+        tex = tex.permute(0, 2, 3, 1)
+        self.model.set_material_texture(tex.contiguous())
+        self._rebuild_optimizer()
 
     def _apply_seam_padding(self) -> None:
         """执行 seam padding：膨胀纹理中的空白区域。"""
         radius = self.config.seam_padding.dilation_radius
-        H, W = self.features_dc.shape[1], self.features_dc.shape[2]
+        tex = self.model.get_material_texture().to(self.device)
+        H, W = tex.shape[1], tex.shape[2]
         valid_mask = torch.ones(1, H, W, 1, device=self.device)
-
-        self.features_dc = nn.Parameter(
-            dilate_texture(self.features_dc.data, valid_mask, radius=radius).contiguous()
-        )
-        # features_rest 可能为空（SH order 0 时通道数为 0），跳过
-        if self.features_rest.shape[-1] > 0:
-            self.features_rest = nn.Parameter(
-                dilate_texture(self.features_rest.data, valid_mask, radius=radius).contiguous()
-            )
-
-        # 重建优化器以保持梯度跟踪
-        base_lr = self.config.training.lr
-        self.optimizer = Adam([
-            {"params": [self.features_dc], "lr": base_lr, "name": "f_dc"},
-            {"params": [self.features_rest], "lr": base_lr * self.config.training.rest_lr_ratio, "name": "f_rest"},
-        ])
+        tex = dilate_texture(tex, valid_mask, radius=radius).contiguous()
+        self.model.set_material_texture(tex)
+        self._rebuild_optimizer()
 
     # ------------------------------------------------------------------
     # Training
@@ -193,50 +167,53 @@ class Trainer:
         # ---- 断点续训 ----
         if resume_from is not None:
             ckpt = torch.load(resume_from, map_location=self.device)
-            if isinstance(ckpt, dict) and "features_dc" in ckpt:
-                state = ckpt
-                start_epoch = state.get("epoch", 0)
-                self.features_dc = nn.Parameter(state["features_dc"].to(self.device))
-                self.features_rest = nn.Parameter(state["features_rest"].to(self.device))
-                base_lr = self.config.training.lr
-                self.optimizer = Adam([
-                    {"params": [self.features_dc], "lr": base_lr, "name": "f_dc"},
-                    {"params": [self.features_rest], "lr": base_lr * self.config.training.rest_lr_ratio, "name": "f_rest"},
-                ])
-                self.scheduler = MultiStepLR(
-                    self.optimizer,
-                    milestones=self.config.training.lr_decay_epochs,
-                    gamma=self.config.training.lr_decay,
-                )
-                for _ in range(start_epoch):
-                    self.scheduler.step()
-                print(f"[Resume] 从 epoch {start_epoch} 继续, loss={state.get('loss', 'N/A')}")
-            elif isinstance(ckpt, dict) and "sh_texture" in ckpt:
-                # 旧格式兼容：单张 sh_texture → 拆分为 DC + Rest
-                state = ckpt
-                start_epoch = state.get("epoch", 0)
-                tex = state["sh_texture"].to(self.device)  # [1, H, W, C]
-                self.features_dc = nn.Parameter(tex[..., :3].contiguous())
-                self.features_rest = nn.Parameter(tex[..., 3:].contiguous())
-                base_lr = self.config.training.lr
-                self.optimizer = Adam([
-                    {"params": [self.features_dc], "lr": base_lr, "name": "f_dc"},
-                    {"params": [self.features_rest], "lr": base_lr * self.config.training.rest_lr_ratio, "name": "f_rest"},
-                ])
-                self.scheduler = MultiStepLR(
-                    self.optimizer,
-                    milestones=self.config.training.lr_decay_epochs,
-                    gamma=self.config.training.lr_decay,
-                )
-                for _ in range(start_epoch):
-                    self.scheduler.step()
-                print(f"[Resume] 从旧格式恢复, epoch {start_epoch}")
+            if isinstance(ckpt, dict):
+                if "render_mode" in ckpt:
+                    # New format: ShadingModel state_dict
+                    self.model.load_state_dict(ckpt)
+                    start_epoch = ckpt.get("epoch", 0)
+                elif "features_dc" in ckpt:
+                    # Old SH format
+                    state = {
+                        "render_mode": "sh",
+                        "features_dc": ckpt["features_dc"],
+                        "features_rest": ckpt["features_rest"],
+                    }
+                    self.model.load_state_dict(state)
+                    start_epoch = ckpt.get("epoch", 0)
+                elif "sh_texture" in ckpt:
+                    # Oldest SH format
+                    tex = ckpt["sh_texture"]
+                    state = {
+                        "render_mode": "sh",
+                        "features_dc": tex[..., :3],
+                        "features_rest": tex[..., 3:],
+                    }
+                    self.model.load_state_dict(state)
+                    start_epoch = ckpt.get("epoch", 0)
+                else:
+                    start_epoch = ckpt.get("epoch", 0)
             else:
                 # 最旧格式：仅纹理张量
                 tex = ckpt.to(self.device)
-                self.features_dc = nn.Parameter(tex[..., :3].contiguous())
-                self.features_rest = nn.Parameter(tex[..., 3:].contiguous())
+                state = {
+                    "render_mode": "sh",
+                    "features_dc": tex[..., :3],
+                    "features_rest": tex[..., 3:],
+                }
+                self.model.load_state_dict(state)
                 print("[Resume] 加载纹理 (最旧格式, epoch 未知)")
+
+            self._rebuild_optimizer()
+            self.scheduler = MultiStepLR(
+                self.optimizer,
+                milestones=self.config.training.lr_decay_epochs,
+                gamma=self.config.training.lr_decay,
+            )
+            for _ in range(start_epoch):
+                self.scheduler.step()
+            if start_epoch > 0:
+                print(f"[Resume] 从 epoch {start_epoch} 继续")
 
         num_epochs = self.config.training.num_epochs
         batch_size = self.config.training.batch_size
@@ -244,7 +221,7 @@ class Trainer:
         num_views = len(self.dataset)
 
         # 确保渲染器与当前纹理分辨率匹配
-        tex_res = self.features_dc.shape[1]
+        tex_res = self.model.get_material_texture().shape[1]
         self.current_resolution = tex_res
         self.renderer = self._create_renderer(tex_res)
 
@@ -252,7 +229,7 @@ class Trainer:
             # ---- 检查分辨率调度 ----
             target_res = self._current_resolution(epoch)
             if target_res != self.current_resolution:
-                self._resize_sh_texture(target_res)
+                self._resize_textures(target_res)
                 self.renderer = self._create_renderer(target_res)
                 self.current_resolution = target_res
 
@@ -267,9 +244,14 @@ class Trainer:
                 gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1, 3, H_gt, W_gt]
 
                 # 渲染
-                rendered, mask, _ = self.renderer.render(
-                    self.features_dc, self.features_rest, camera,
-                )  # [1, H, W, 3], [1, H, W]
+                if self.config.render_mode == "sh":
+                    # SH uses the old render path for backward compat
+                    rendered, mask, _ = self.renderer.render(
+                        self.model.features_dc, self.model.features_rest, camera,
+                    )
+                else:
+                    rast, texc, wpos, interp_normals, vdirs = self.renderer.rasterize_and_interpolate(camera)
+                    rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution)
 
                 # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，垂直翻转到图像坐标 (原点左上)
                 rendered = rendered.flip(1)
@@ -284,9 +266,9 @@ class Trainer:
                 # sRGB → linear: GT 图像是 sRGB 编码, 渲染输出是线性空间
                 gt_linear = gt_resized.clamp(0, 1).pow(2.2)
 
-                # 计算损失（TV loss 需要拼接纹理）
-                sh_tex_for_loss = cat_sh_features(self.features_dc, self.features_rest)
-                loss = self.criterion(rendered, gt_linear, mask, sh_tex_for_loss)
+                # 计算损失（TV loss 需要纹理）
+                tex_for_loss = self.model.get_material_texture().to(self.device)
+                loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
                 # 反向传播 & 更新
                 loss.backward()
@@ -308,9 +290,13 @@ class Trainer:
             with torch.no_grad():
                 _img, _cam = self.dataset[0]
                 _gt = torch.from_numpy(_img).unsqueeze(0).to(self.device)
-                _rendered, _mask, _ = self.renderer.render(
-                    self.features_dc, self.features_rest, _cam,
-                )
+                if self.config.render_mode == "sh":
+                    _rendered, _mask, _ = self.renderer.render(
+                        self.model.features_dc, self.model.features_rest, _cam,
+                    )
+                else:
+                    _rast, _texc, _wpos, _inorm, _vdir = self.renderer.rasterize_and_interpolate(_cam)
+                    _rendered, _mask = self.model.shade(_rast, _texc, _wpos, _inorm, _vdir, _cam, self.current_resolution)
                 _rendered = _rendered.flip(1)
                 _mask = _mask.flip(1)
                 _gt_hw = _gt.permute(0, 1, 2, 3)
@@ -338,13 +324,11 @@ class Trainer:
                 os.makedirs(ep_dir, exist_ok=True)
 
                 ckpt_path = os.path.join(ep_dir, "sh_texture.pt")
-                torch.save({
-                    "epoch": epoch + 1,
-                    "features_dc": self.features_dc.data.detach().cpu(),
-                    "features_rest": self.features_rest.data.detach().cpu(),
-                    "loss": avg_loss,
-                    "resolution": self.current_resolution,
-                }, ckpt_path)
+                ckpt = self.model.state_dict()
+                ckpt["epoch"] = epoch + 1
+                ckpt["loss"] = avg_loss
+                ckpt["resolution"] = self.current_resolution
+                torch.save(ckpt, ckpt_path)
                 print(f"  [Checkpoint] {ckpt_path}")
 
                 # ---- 调试输出: compare / diffuse / video ----
@@ -365,7 +349,7 @@ class Trainer:
         from src.exporter import export_diffuse_texture
         from src.video import render_video
 
-        tex = self.get_sh_texture()
+        tex = self.model.get_material_texture()
 
         # 0. Loss + PSNR 曲线
         epochs = self.history["epoch"]
@@ -396,7 +380,7 @@ class Trainer:
 
         # 1. Diffuse 贴图
         diffuse_path = os.path.join(output_dir, "diffuse.png")
-        export_diffuse_texture(tex, diffuse_path, self.sh_order)
+        export_diffuse_texture(tex, diffuse_path, self.config.texture.sh_order)
 
         # 2. GT vs Rendered 对比 (均匀采样 4 个方向: 前/右/后/左, 2x2 atlas)
         num_views = len(self.dataset)
@@ -404,8 +388,12 @@ class Trainer:
         compare_indices = [int(i * num_views / compare_count) for i in range(compare_count)]
 
         # 准备 DC-only 参数（高频置零）
-        dc_only = self.features_dc.data
-        rest_data = self.features_rest.data
+        if hasattr(self.model, 'features_dc'):
+            dc_only = self.model.features_dc.data
+            rest_data = self.model.features_rest.data
+        else:
+            dc_only = None
+            rest_data = None
 
         for ci, idx in enumerate(compare_indices):
             img_np, camera = self.dataset[idx]
@@ -413,8 +401,14 @@ class Trainer:
 
             # 渲染 2 个版本：Full 和 DC only
             with torch.no_grad():
-                rgb_full, mask, _ = self.renderer.render(self.features_dc, self.features_rest, camera)
-                rgb_dc, _, _ = self.renderer.render(dc_only, rest_data * 0, camera)
+                if self.config.render_mode == "sh":
+                    rgb_full, mask, _ = self.renderer.render(self.model.features_dc, self.model.features_rest, camera)
+                    rgb_dc, _, _ = self.renderer.render(dc_only, rest_data * 0, camera)
+                else:
+                    rast, texc, wpos, inorm, vdir = self.renderer.rasterize_and_interpolate(camera)
+                    rgb_full, mask = self.model.shade(rast, texc, wpos, inorm, vdir, camera, self.current_resolution)
+                    rgb_dc = rgb_full  # PBR has no DC/rest split
+                    mask = mask
 
             # 高频净贡献 = Full - DC（可能有负值，clamp 到 [0,1]）
             rgb_hf = (rgb_full - rgb_dc).clamp(0, 1)
@@ -470,17 +464,18 @@ class Trainer:
             fps=cfg.video.fps,
         )
 
-        # Full SH
+        # Full SH / PBR
         render_video(sh_texture=tex, output_path=os.path.join(output_dir, "orbit.mp4"), **video_kwargs)
 
-        # DC only video
-        dc_tex = torch.cat([self.features_dc.data.detach().cpu(),
-                            torch.zeros_like(self.features_rest.data.detach().cpu())], dim=-1)
-        render_video(sh_texture=dc_tex, output_path=os.path.join(output_dir, "orbit_dc.mp4"), **video_kwargs)
+        # DC only video (SH only)
+        if hasattr(self.model, 'features_dc'):
+            dc_tex = torch.cat([self.model.features_dc.data.detach().cpu(),
+                                torch.zeros_like(self.model.features_rest.data.detach().cpu())], dim=-1)
+            render_video(sh_texture=dc_tex, output_path=os.path.join(output_dir, "orbit_dc.mp4"), **video_kwargs)
 
-        # High-freq video: Full - DC 逐帧差分
-        render_video(sh_texture=tex, output_path=os.path.join(output_dir, "orbit_hf.mp4"),
-                     subtract_texture=dc_tex, **video_kwargs)
+            # High-freq video: Full - DC 逐帧差分
+            render_video(sh_texture=tex, output_path=os.path.join(output_dir, "orbit_hf.mp4"),
+                         subtract_texture=dc_tex, **video_kwargs)
 
         print(f"  [Debug] diffuse + compare + video → {output_dir}")
 
@@ -489,4 +484,4 @@ class Trainer:
     # ------------------------------------------------------------------
     def get_sh_texture(self) -> torch.Tensor:
         """返回拼接后的完整 SH 纹理的 CPU 张量（detached）。"""
-        return cat_sh_features(self.features_dc, self.features_rest).detach().cpu()
+        return self.model.get_material_texture()
