@@ -45,3 +45,12 @@ video:
   num_frames: 120
   resolution: 1024
   fps: 30
+
+uv_optimization:
+  enabled: false  # Set to true to enable
+  lr: 0.001
+  tex_steps_per_uv: 5
+  sym_dirichlet_weight: 0.01
+  area_preserve_weight: 0.1
+  lbfgs_max_iter: 20
+  start_epoch: 100

@@ -80,7 +80,25 @@ class Trainer:
         self.current_resolution = self._current_resolution(0)
         self.renderer = self._create_renderer(self.current_resolution)
 
-        # ---- 8. 训练历史记录 ----
+        # ---- 9. UV 优化 ----
+        self.uv_param = None
+        self.uv_optimizer = None
+        if config.render_mode == "pbr" and config.uv_opt.enabled:
+            from src.uv.param import UVParameterizer
+            from src.uv.optimizer import UVOptimizer
+            self.uv_param = UVParameterizer(mesh.uvs, mesh.uv_idx).to(self.device)
+            self.uv_optimizer = UVOptimizer(
+                self.uv_param,
+                lr=config.uv_opt.lr,
+                max_iter=config.uv_opt.lbfgs_max_iter,
+            )
+            # 计算初始目标 UV 面积（用于面积保持）
+            from src.uv.losses import _triangle_uv_areas
+            with torch.no_grad():
+                init_uvs = self.uv_param.get_uvs()
+                self._uv_target_areas = _triangle_uv_areas(init_uvs, self.uv_param.get_uv_idx())
+
+        # ---- 10. 训练历史记录 ----
         self.history: dict[str, list] = {"epoch": [], "loss": [], "psnr": []}
 
     # ------------------------------------------------------------------
@@ -151,6 +169,80 @@ class Trainer:
         self._rebuild_optimizer()
 
     # ------------------------------------------------------------------
+    # UV helpers
+    # ------------------------------------------------------------------
+    def _sync_uvs_to_renderer(self) -> None:
+        """将优化后的 UV 坐标同步到渲染器。"""
+        if self.uv_param is not None:
+            new_uvs = self.uv_param.get_uvs().unsqueeze(0)  # [1, V, 2]
+            self.renderer.set_uvs(new_uvs)
+
+    def _uv_optimization_step(self, indices: list[int]) -> float:
+        """执行一步 UV L-BFGS 优化。"""
+        from src.uv.losses import SymDirichletLoss, AreaPreserveLoss
+        from src.uv.aggregate import per_triangle_render_loss
+
+        sym_dirichlet = SymDirichletLoss()
+        area_preserve = AreaPreserveLoss()
+        cfg = self.config.uv_opt
+
+        def closure():
+            self.uv_optimizer.zero_grad()
+            self._sync_uvs_to_renderer()
+
+            total_loss = torch.tensor(0.0, device=self.device)
+            all_pixel_loss = []
+            all_tri_ids = []
+            all_masks = []
+            num_faces = self.faces.shape[0]
+
+            for idx in indices:
+                img_np, camera = self.dataset[idx]
+                gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)
+                gt_hw = gt.permute(0, 1, 2, 3)
+                H, W = self.current_resolution, self.current_resolution
+                gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
+                gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+                gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+
+                rast, texc, wpos, inorm, vdir, tang, btang = self.renderer.rasterize_and_interpolate(camera)
+                rendered, mask = self.model.shade(rast, texc, wpos, inorm, vdir, camera, self.current_resolution, tang, btang)
+                rendered = rendered.flip(1)
+                mask = mask.flip(1)
+
+                mask_f = mask.unsqueeze(-1).float()
+                pixel_loss = (rendered - gt_linear).abs() * mask_f
+                total_loss = total_loss + pixel_loss.sum() / (mask.sum() * 3 + 1e-8)
+
+                all_pixel_loss.append(pixel_loss.detach())
+                all_tri_ids.append((rast[0, :, :, 0] * num_faces).long().unsqueeze(0))
+                all_masks.append(mask.bool())
+
+            total_loss = total_loss / len(indices)
+
+            uv_coords = self.uv_param.get_uvs()
+            verts_3d = self.vertices.squeeze(0)
+            faces_64 = self.faces.long()
+
+            combined_pixel_loss = torch.cat(all_pixel_loss, dim=0)
+            combined_tri_ids = torch.cat(all_tri_ids, dim=0)
+            combined_masks = torch.cat(all_masks, dim=0)
+            tri_render_loss = per_triangle_render_loss(combined_pixel_loss, combined_tri_ids, combined_masks, num_faces)
+
+            sd_loss = sym_dirichlet(uv_coords, verts_3d, faces_64, tri_render_loss)
+            total_loss = total_loss + cfg.sym_dirichlet_weight * sd_loss
+
+            ap_loss = area_preserve(uv_coords, verts_3d, faces_64, self._uv_target_areas)
+            total_loss = total_loss + cfg.area_preserve_weight * ap_loss
+
+            total_loss.backward()
+            return total_loss
+
+        loss_val = self.uv_optimizer.step(closure)
+        self._sync_uvs_to_renderer()
+        return loss_val.item()
+
+    # ------------------------------------------------------------------
     # Training
     # ------------------------------------------------------------------
     def train(
@@ -211,6 +303,16 @@ class Trainer:
                 print("[Resume] 加载纹理 (最旧格式, epoch 未知)")
 
             self._rebuild_optimizer()
+
+            # Resume UV params
+            if self.uv_param is not None:
+                uv_ckpt_path = os.path.join(os.path.dirname(resume_from), "uv_params.pt")
+                if os.path.exists(uv_ckpt_path):
+                    uv_ckpt = torch.load(uv_ckpt_path, map_location=self.device)
+                    self.uv_param.raw.data.copy_(uv_ckpt["uv_raw"].to(self.device))
+                    self._uv_target_areas = uv_ckpt["uv_target_areas"].to(self.device)
+                    print(f"[Resume] Loaded UV params from epoch {uv_ckpt.get('epoch', '?')}")
+
             self.scheduler = MultiStepLR(
                 self.optimizer,
                 milestones=self.config.training.lr_decay_epochs,
@@ -243,54 +345,90 @@ class Trainer:
             indices = random.sample(range(num_views), min(batch_size, num_views))
 
             epoch_loss = 0.0
-            for idx in indices:
-                self.optimizer.zero_grad()
 
-                img_np, camera = self.dataset[idx]
-                gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1, 3, H_gt, W_gt]
+            # 判断是否启用 UV 交替优化
+            uv_active = (
+                self.uv_param is not None
+                and epoch >= self.config.uv_opt.start_epoch
+            )
 
-                # 渲染
-                if self.config.render_mode == "sh":
-                    # SH uses the old render path for backward compat
-                    rendered, mask, _ = self.renderer.render(
-                        self.model.features_dc, self.model.features_rest, camera,
-                    )
-                else:
-                    rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
-                    rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
+            if uv_active:
+                # 交替优化：tex_steps_per_uv 步 Adam (纹理)，然后 1 步 L-BFGS (UV)
+                for _ in range(self.config.uv_opt.tex_steps_per_uv):
+                    for idx in indices:
+                        self.optimizer.zero_grad()
 
-                # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，垂直翻转到图像坐标 (原点左上)
-                rendered = rendered.flip(1)
-                mask = mask.flip(1)
+                        img_np, camera = self.dataset[idx]
+                        gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)
 
-                # 将 GT resize 到渲染分辨率
-                gt_hw = gt.permute(0, 1, 2, 3)  # [1, 3, H_gt, W_gt]
-                H, W = rendered.shape[1], rendered.shape[2]
-                gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
-                gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)  # [1, H, W, 3]
+                        self._sync_uvs_to_renderer()
+                        rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
+                        rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
 
-                # sRGB → linear: GT 图像是 sRGB 编码, 渲染输出是线性空间
-                gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+                        rendered = rendered.flip(1)
+                        mask = mask.flip(1)
 
-                # 计算损失（TV loss 需要纹理）
-                tex_for_loss = self.model.get_material_texture().to(self.device)
-                loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
+                        gt_hw = gt.permute(0, 1, 2, 3)
+                        H, W = rendered.shape[1], rendered.shape[2]
+                        gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
+                        gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+                        gt_linear = gt_resized.clamp(0, 1).pow(2.2)
 
-                # PBR: 环境贴图正则化（TV + L2 防止 HDR 值爆炸）
-                if self.config.render_mode == "pbr":
-                    from src.losses import tv_loss
-                    # TV: 平滑性（raw 参数空间）
-                    env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
-                    # L2: 防止解码后的值过大
-                    env_decoded = self.model.env_map.decode()
-                    env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
-                    loss = loss + env_tv + env_l2
+                        tex_for_loss = self.model.get_material_texture().to(self.device)
+                        loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
-                # 反向传播 & 更新
-                loss.backward()
-                self.optimizer.step()
+                        if self.config.render_mode == "pbr":
+                            from src.losses import tv_loss
+                            env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
+                            env_decoded = self.model.env_map.decode()
+                            env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+                            loss = loss + env_tv + env_l2
 
-                epoch_loss += loss.item()
+                        loss.backward()
+                        self.optimizer.step()
+                        epoch_loss += loss.item()
+
+                # UV optimization step (L-BFGS)
+                uv_loss = self._uv_optimization_step(indices)
+                epoch_loss += uv_loss
+            else:
+                # 原始训练逻辑（无 UV 优化）
+                for idx in indices:
+                    self.optimizer.zero_grad()
+
+                    img_np, camera = self.dataset[idx]
+                    gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)
+
+                    if self.config.render_mode == "sh":
+                        rendered, mask, _ = self.renderer.render(
+                            self.model.features_dc, self.model.features_rest, camera,
+                        )
+                    else:
+                        rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
+                        rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
+
+                    rendered = rendered.flip(1)
+                    mask = mask.flip(1)
+
+                    gt_hw = gt.permute(0, 1, 2, 3)
+                    H, W = rendered.shape[1], rendered.shape[2]
+                    gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
+                    gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+                    gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+
+                    tex_for_loss = self.model.get_material_texture().to(self.device)
+                    loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
+
+                    if self.config.render_mode == "pbr":
+                        from src.losses import tv_loss
+                        env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
+                        env_decoded = self.model.env_map.decode()
+                        env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+                        loss = loss + env_tv + env_l2
+
+                    loss.backward()
+                    self.optimizer.step()
+                    epoch_loss += loss.item()
 
             # 调度器步进
             self.scheduler.step()
@@ -343,6 +481,15 @@ class Trainer:
                     self.model, ep_dir, epoch + 1, avg_loss, self.current_resolution,
                 )
                 print(f"  [Checkpoint] {ckpt_path}")
+
+                # Save UV params if active
+                if self.uv_param is not None:
+                    uv_ckpt = {
+                        "uv_raw": self.uv_param.raw.detach().cpu(),
+                        "uv_target_areas": self._uv_target_areas.cpu(),
+                        "epoch": epoch + 1,
+                    }
+                    torch.save(uv_ckpt, os.path.join(ep_dir, "uv_params.pt"))
 
                 # ---- 调试输出: curves + 着色模型特有日志 ----
                 try:
