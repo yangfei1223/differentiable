@@ -22,6 +22,8 @@ def parse_args():
                         help="导出/视频模式下 SH 纹理检查点路径 (.pt)")
     parser.add_argument("--resume", type=str, default=None,
                         help="断点续训的 checkpoint 路径 (.pt)")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="输出目录 (默认从数据集路径自动推导)")
     return parser.parse_args()
 
 
@@ -42,6 +44,10 @@ def main():
     if cfg.render_mode != "sh":
         dataset_name = f"{dataset_name}_{cfg.render_mode}"
     output_base = Path(cfg.export.output_dir) / dataset_name
+
+    # CLI --output_dir 覆盖默认推导
+    if args.output_dir is not None:
+        output_base = Path(args.output_dir)
 
     if args.mode == "train":
         logger.info("=" * 60)
