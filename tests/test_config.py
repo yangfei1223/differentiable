@@ -1,13 +1,42 @@
-"""测试配置系统 — render_mode + PBRConfig。"""
+"""测试配置系统 — render_mode + PBRConfig + UVOptConfig。"""
 import tempfile
 import pytest
-from src.config import Config, PBRConfig, load_config
+import yaml
+from src.config import Config, PBRConfig, UVOptConfig, load_config
 
 
 def test_default_config_has_render_mode():
     cfg = Config()
     assert cfg.render_mode == "sh"
 
+
+def test_uv_opt_config_defaults():
+    cfg = UVOptConfig()
+    assert cfg.enabled is False
+    assert cfg.lr == 0.001
+    assert cfg.tex_steps_per_uv == 5
+    assert cfg.sym_dirichlet_weight == 0.01
+    assert cfg.area_preserve_weight == 0.1
+    assert cfg.lbfgs_max_iter == 20
+    assert cfg.start_epoch == 100
+
+
+def test_uv_opt_config_from_yaml(tmp_path):
+    data = {
+        "render_mode": "pbr",
+        "uv_optimization": {
+            "enabled": True,
+            "lr": 0.002,
+            "sym_dirichlet_weight": 0.05,
+        },
+    }
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml.dump(data))
+    cfg = load_config(str(p))
+    assert cfg.uv_opt.enabled is True
+    assert cfg.uv_opt.lr == 0.002
+    assert cfg.uv_opt.sym_dirichlet_weight == 0.05
+    assert cfg.uv_opt.area_preserve_weight == 0.1
 
 def test_default_config_has_pbr():
     cfg = Config()

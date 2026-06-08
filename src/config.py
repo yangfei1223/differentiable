@@ -19,6 +19,17 @@ class PBRConfig:
 
 
 @dataclass
+class UVOptConfig:
+    enabled: bool = False
+    lr: float = 0.001
+    tex_steps_per_uv: int = 5
+    sym_dirichlet_weight: float = 0.01
+    area_preserve_weight: float = 0.1
+    lbfgs_max_iter: int = 20
+    start_epoch: int = 100
+
+
+@dataclass
 class DataConfig:
     mesh_path: str = "data/scene/lowpoly.obj"
     gt_dir: str = "data/gt"
@@ -105,6 +116,7 @@ class Config:
     seam_padding: SeamPaddingConfig = field(default_factory=SeamPaddingConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    uv_opt: UVOptConfig = field(default_factory=UVOptConfig)
 
 
 def _parse_resolution_schedule(raw: list) -> List[ResolutionStep]:
@@ -138,5 +150,7 @@ def load_config(path: str | Path) -> Config:
         cfg.export = ExportConfig(**raw["export"])
     if "video" in raw:
         cfg.video = VideoConfig(**raw["video"])
+    if "uv_optimization" in raw:
+        cfg.uv_opt = UVOptConfig(**raw["uv_optimization"])
 
     return cfg
