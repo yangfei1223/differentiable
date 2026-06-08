@@ -4,7 +4,18 @@ from __future__ import annotations
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+
+
+@dataclass
+class PBRConfig:
+    env_map_res: list = field(default_factory=lambda: [256, 512])
+    n_mip_levels: int = 5
+    brdf_lut_size: int = 256
+    env_lr_ratio: float = 1.0
+    env_tv_weight: float = 0.0005
+    env_l2_weight: float = 0.0001
+    init_env_map: Optional[str] = None
 
 
 @dataclass
@@ -85,6 +96,8 @@ class VideoConfig:
 
 @dataclass
 class Config:
+    render_mode: str = "sh"  # "sh" | "pbr"
+    pbr: PBRConfig = field(default_factory=PBRConfig)
     data: DataConfig = field(default_factory=DataConfig)
     texture: TextureConfig = field(default_factory=TextureConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -104,6 +117,10 @@ def load_config(path: str | Path) -> Config:
         raw = yaml.safe_load(f)
 
     cfg = Config()
+    if "render_mode" in raw:
+        cfg.render_mode = raw["render_mode"]
+    if "pbr" in raw:
+        cfg.pbr = PBRConfig(**raw["pbr"])
     if "data" in raw:
         cfg.data = DataConfig(**raw["data"])
     if "texture" in raw:

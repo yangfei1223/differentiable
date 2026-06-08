@@ -114,7 +114,7 @@ class TestTorchConversion:
 
     def test_dtypes(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         assert v.dtype == torch.float32
         assert f.dtype == torch.int64
@@ -123,7 +123,7 @@ class TestTorchConversion:
 
     def test_values_match(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         np.testing.assert_allclose(v.numpy(), mesh.vertices.astype(np.float32), atol=1e-6)
         np.testing.assert_array_equal(f.numpy(), mesh.faces)
@@ -132,7 +132,7 @@ class TestTorchConversion:
 
     def test_no_grad(self):
         mesh = _make_quad_mesh()
-        v, f, uv, uvi = mesh.to_torch()
+        v, f, uv, uvi, n, ni, t, bt = mesh.to_torch()
 
         assert not v.requires_grad
         assert not f.requires_grad
@@ -148,3 +148,67 @@ class TestProperties:
     def test_num_faces(self):
         mesh = _make_quad_mesh()
         assert mesh.num_faces == 2
+
+
+# ---------------------------------------------------------------------------
+# Normals tests
+# ---------------------------------------------------------------------------
+
+
+def test_mesh_data_has_normals():
+    """MeshData 应包含法线字段。"""
+    import numpy as np
+    from src.mesh import MeshData
+
+    verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+    faces = np.array([[0, 1, 2]], dtype=np.int64)
+    uvs = np.zeros((3, 2), dtype=np.float64)
+    uv_idx = np.array([[0, 1, 2]], dtype=np.int64)
+    normals = np.array([[0, 0, 1], [0, 0, 1], [0, 0, 1]], dtype=np.float64)
+
+    mesh = MeshData(vertices=verts, faces=faces, uvs=uvs, uv_idx=uv_idx, normals=normals)
+    assert mesh.normals is not None
+    assert mesh.normals.shape == (3, 3)
+
+
+def test_mesh_data_compute_vertex_normals():
+    """compute_vertex_normals 应返回单位法线。"""
+    import numpy as np
+    from src.mesh import MeshData
+
+    verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+    faces = np.array([[0, 1, 2]], dtype=np.int64)
+    uvs = np.zeros((3, 2), dtype=np.float64)
+    uv_idx = np.array([[0, 1, 2]], dtype=np.int64)
+    normals = np.zeros_like(verts)
+
+    mesh = MeshData(vertices=verts, faces=faces, uvs=uvs, uv_idx=uv_idx, normals=normals)
+    vn = mesh.compute_vertex_normals()
+    assert vn.shape == (3, 3)
+    for i in range(3):
+        assert abs(vn[i, 2] - 1.0) < 0.01
+
+
+def test_load_mesh_includes_normals(tmp_path):
+    """load_mesh 应提取顶点法线。"""
+    import numpy as np
+    from src.mesh import load_mesh
+
+    obj_content = """v 0 0 0
+v 1 0 0
+v 0 1 0
+vn 0 0 1
+vn 0 0 1
+vn 0 0 1
+vt 0 0
+vt 1 0
+vt 0 1
+f 1/1/1 2/2/2 3/3/3
+"""
+    obj_path = tmp_path / "test.obj"
+    obj_path.write_text(obj_content)
+
+    mesh = load_mesh(str(obj_path))
+    assert mesh.normals is not None
+    assert mesh.normals.shape[0] == 3
+    assert mesh.normals.shape[1] == 3

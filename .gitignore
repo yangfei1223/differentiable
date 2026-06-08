@@ -1,7 +1,22 @@
-data/gt/
-data/scene/
-data/cameras.json
+# Data & output
+data/
 output/
+asset/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 *.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# Tools
+.pytest_cache/
+.opencode/
+.mypy_cache/
