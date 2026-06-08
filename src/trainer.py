@@ -222,7 +222,7 @@ class Trainer:
 
             uv_coords = self.uv_param.get_uvs()
             verts_3d = self.vertices.squeeze(0)
-            faces_64 = self.faces.long()
+            faces_64 = self.faces.long().to(self.device)
 
             combined_pixel_loss = torch.cat(all_pixel_loss, dim=0)
             combined_tri_ids = torch.cat(all_tri_ids, dim=0)
