@@ -81,6 +81,16 @@ class DifferentiableRenderer:
         # nvdiffrast GL 上下文
         self.glctx = dr.RasterizeGLContext()
 
+    def set_uvs(self, uvs: torch.Tensor) -> None:
+        """更新 UV 坐标（用于 UV 优化）。
+
+        Args:
+            uvs: UV 坐标 [1, V, 2] 或 [V, 2]，值在 (0, 1)。
+        """
+        if uvs.dim() == 2:
+            uvs = uvs.unsqueeze(0)
+        self.uvs = uvs.to(self.device).float()
+
     # ------------------------------------------------------------------
     # rasterize_and_interpolate
     # ------------------------------------------------------------------

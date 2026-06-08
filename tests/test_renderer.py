@@ -128,3 +128,41 @@ def test_render_dc_color_correct():
     assert mask[0, 32, 32] > 0, "中心像素应可见"
     assert torch.allclose(center_rgb, torch.tensor(init_dc, device="cuda"), atol=0.05), \
         f"DC color 应接近 {init_dc}, 实际 {center_rgb.tolist()}"
+
+
+@cuda_skip
+def test_renderer_set_uvs():
+    """set_uvs should update UVs used for interpolation."""
+    import numpy as np
+
+    verts = torch.tensor([[0.0, 0.0, 0.5], [1.0, 0.0, 0.5], [0.5, 1.0, 0.5]], dtype=torch.float32)
+    faces = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+    uvs = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]], dtype=torch.float32)
+    uv_idx = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+    normals = torch.tensor([[0, 0, 1.0], [0, 0, 1.0], [0, 0, 1.0]], dtype=torch.float32)
+    normal_idx = faces.clone()
+
+    renderer = DifferentiableRenderer(
+        vertices=verts, faces=faces, uvs=uvs, uv_idx=uv_idx,
+        normals=normals, normal_idx=normal_idx,
+        resolution=64, device="cuda",
+    )
+
+    cam = Camera(
+        position=np.array([0.5, 0.5, 2.0]),
+        look_at=np.array([0.5, 0.5, 0.0]),
+        up=np.array([0.0, 1.0, 0.0]),
+        fov_deg=45.0, image_width=64, image_height=64,
+    )
+
+    _, texc1, *_ = renderer.rasterize_and_interpolate(cam)
+
+    new_uvs = torch.tensor([[0.1, 0.1], [0.9, 0.1], [0.5, 0.9]], dtype=torch.float32)
+    renderer.set_uvs(new_uvs.unsqueeze(0))
+
+    _, texc2, *_ = renderer.rasterize_and_interpolate(cam)
+
+    visible = texc1[..., 0] > 0
+    if visible.any():
+        diff = (texc1[visible] - texc2[visible]).abs().max().item()
+        assert diff > 0.01, "UVs should change after set_uvs"
