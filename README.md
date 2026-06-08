@@ -102,11 +102,87 @@ pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
 
 ## 数据准备
 
+训练数据由三部分组成：低模几何 (`lowpoly.glb`)、多视角 GT 渲染图 (`gt/*.png`)、相机参数 (`cameras.json`)，按 `{scene}_{yymmdd}` 目录组织：
+
+```
+data/{scene}_{yymmdd}/
+├── scene/lowpoly.glb      # 低模几何（已完成减面 + UV 展开）
+├── gt/view_0000.png       # 多视角 Cycles GT 渲染图
+├── gt/view_0001.png
+└── cameras.json           # 相机参数 (position, look_at, fov, ...)
+```
+
+### 前置条件
+
+| 项目 | 要求 |
+|------|------|
+| Blender | 3.x 及以上（推荐 4.x） |
+| 高模 | 已完成材质、灯光、场景搭建 |
+| 低模 | 已完成减面（Decimate）、UV 展开（无重叠），与高模位置对齐 |
+| 磁盘空间 | 每视角约 3-4 MB（1024×1024 PNG），100 视角 ≈ 350 MB |
+
+### 方法一：自动化脚本（推荐）
+
+`scripts/blender_export.py` 一键完成所有步骤：隐藏低模 → 显示高模 → Fibonacci 半球采样生成相机 → 逐相机 Cycles 渲染 GT → 导出 cameras.json → 导出低模 GLB。
+
 ```bash
 blender --background asset/scene.blend --python scripts/blender_export.py
 ```
 
-详见 [scripts/README.md](scripts/README.md)。
+脚本顶部可配置参数（场景名、视角数量、采样半径、Cycles 采样数、分辨率等），详见 [scripts/README.md](scripts/README.md)。
+
+### 方法二：通过 Blender MCP
+
+[Blender MCP](https://www.blender.org/lab/mcp-server/) 允许通过 AI 编程工具（如 Cursor、Claude Code、OpenCode）直接操作 Blender，交互式完成数据制备。
+
+**安装 MCP 插件：**
+
+按照 [Blender MCP 官方教程](https://www.blender.org/lab/mcp-server/) 安装并启用插件。
+
+**交互式制备流程：**
+
+通过 MCP 连接 Blender 后，可以用自然语言指令逐步完成：
+
+1. **导出低模** — 指示 Blender 选中低模对象，导出为 GLB 格式到 `data/{scene}_{yymmdd}/scene/lowpoly.glb`
+2. **生成相机** — 使用 Fibonacci 半球采样在上半球均匀分布 50-200 个相机，对准模型中心
+3. **渲染 GT** — 逐相机用 Cycles 渲染（采样数 ≥ 256，分辨率 1024×1024），保存到 `data/{scene}_{yymmdd}/gt/view_XXXX.png`
+4. **导出相机参数** — 记录每个相机的 position / look_at / up / fov_deg / image_size / image_path，保存为 `cameras.json`
+
+> **提示**：MCP 方式适合需要人工检查中间结果、或场景较为复杂需要调试的情况。自动化脚本适合标准化批量生产。
+
+### cameras.json 格式
+
+```json
+{
+  "blender_coordinate": true,
+  "cameras": [
+    {
+      "position": [1.234, -0.567, 0.891],
+      "look_at": [0.0, 0.0, 0.0],
+      "up": [0.0, 0.0, 1.0],
+      "fov_deg": 45.0,
+      "image_size": [1024, 1024],
+      "image_path": "gt/view_0000.png"
+    }
+  ]
+}
+```
+
+- `blender_coordinate: true` 表示使用 Blender 坐标系（Z-up, 右手系），训练管线会自动转换为 OpenGL 标准坐标
+- `image_path` 相对于数据集根目录
+
+### 验证数据完整性
+
+```bash
+python -c "
+import json, os
+cams = json.load(open('data/{scene}_{yymmdd}/cameras.json'))
+gt = [f for f in os.listdir('data/{scene}_{yymmdd}/gt') if f.endswith('.png')]
+print(f'Cameras: {len(cams[\"cameras\"])}, GT images: {len(gt)}')
+assert len(cams['cameras']) == len(gt), 'Mismatch!'
+print('OK')
+"
+```
 
 ## 训练
 
