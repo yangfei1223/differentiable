@@ -4,14 +4,57 @@
 
 ## 训练结果
 
-| 场景 | 着色模型 | PSNR | 纹理分辨率 |
-|------|---------|------|-----------|
-| 钢琴 | SH (order 2) | 20.37 dB | 2048×2048 |
-| 钢琴 | PBR (split-sum) | **21.41 dB** | 2048×2048 |
-| 头盔 | SH (order 2) | 13.19 dB | 2048×2048 |
-| 头盔 | PBR (split-sum) | **21.97 dB** | 2048×2048 |
+| 场景 | 着色模型 | PSNR | 纹理分辨率 | 备注 |
+|------|---------|------|-----------|------|
+| 头盔 | SH (order 2) | 13.19 dB | 2048×2048 | |
+| 头盔 | PBR (split-sum) | **21.97 dB** | 2048×2048 | |
+| 钢琴 | SH (order 2) | 20.37 dB | 2048×2048 | |
+| 钢琴 | PBR (split-sum) | 21.41 dB | 2048×2048 | 效果未达预期，见分析 |
 
-> 头盔含金属面罩，PBR split-sum 捕捉镜面反射提升 +8.8 dB；钢琴以漫反射为主，PBR 仍有 +1.0 dB 增益。
+> 头盔含金属面罩，PBR split-sum 捕捉镜面反射提升 +8.8 dB；钢琴以漫反射为主，PBR 仅有 +1.0 dB 增益。
+
+### 可视化结果 — 头盔 PBR (2000 epochs)
+
+渲染对比 Atlas（左上：GT，右上：渲染，左下：Diffuse，右下：Specular）：
+
+<p align="center">
+<img src="resource/helmet_pbr_compare_0.png" width="45%"/>
+<img src="resource/helmet_pbr_compare_1.png" width="45%"/>
+</p>
+
+训练曲线（Loss / PSNR）：
+
+<p align="center">
+<img src="resource/helmet_pbr_curves.png" width="60%"/>
+</p>
+
+分解材质贴图（base_color / roughness / metallic / normal）：
+
+<p align="center">
+<img src="resource/helmet_pbr_base_color.png" width="22%"/>
+<img src="resource/helmet_pbr_roughness.png" width="22%"/>
+<img src="resource/helmet_pbr_metallic.png" width="22%"/>
+<img src="resource/helmet_pbr_normal_map.png" width="22%"/>
+</p>
+
+学习到的环境贴图：
+
+<p align="center">
+<img src="resource/helmet_pbr_env_map.png" width="45%"/>
+</p>
+
+### 实验分析
+
+**GT 材质初始化实验**：使用 DamagedHelmet 原始材质贴图（albedo / metallicRoughness / normal）+ 环境光 EXR 初始化 PBR 管线，训练 2000 epochs 后峰值 22.17 dB，相比 random init 的 21.97 dB 仅提升 +0.20 dB。说明材质初始化不是瓶颈，~22 dB 是 split-sum 着色模型在当前配置下的收敛上限。
+
+**局限分析**：split-sum 近似无全局光照（GI）、无阴影、无多次弹射，与 Blender Cycles path tracing 存在本质差距。AO/自发光等缺失效果会被优化吸收到 base_color 和 env_map 中。
+
+**钢琴 PBR 效果不佳的原因**：
+
+- **几何复杂度高**：钢琴原始模型 93875 顶点（6 个子模型），低模 70686 顶点，减面比例小但子模型间接缝和穿插导致渲染伪影
+- **多材质混合**：钢琴包含木质琴身（diffuse）、金属琴弦（specular）、黑白键（高对比）等多种材质，单张 8ch 材质贴图难以同时表达
+- **UV 空间竞争**：多个子模型共享一张纹理，UV 岛之间空间分配不均，细节区域（琴弦、琴键）分辨率不足
+- **场景尺度大**：钢琴场景包围盒远大于头盔，相机分布更稀疏，单位面积采样密度低
 
 ## 功能
 
