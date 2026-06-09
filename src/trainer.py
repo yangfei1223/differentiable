@@ -35,7 +35,7 @@ class Trainer:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # ---- 1. 加载网格 ----
-        mesh = load_mesh(config.data.mesh_path)
+        mesh = load_mesh(config.data.mesh_path, xatlas_init=config.data.xatlas_init)
         self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = mesh.to_torch()
 
         # ---- 2. 创建数据集 ----
@@ -83,6 +83,7 @@ class Trainer:
         # ---- 9. UV 优化 ----
         self.uv_param = None
         self.uv_optimizer = None
+        self._initial_uvs = None  # 保存初始 UV 用于对比图
         if config.render_mode == "pbr" and config.uv_opt.enabled:
             from src.uv.param import UVParameterizer
             from src.uv.optimizer import UVOptimizer
@@ -90,13 +91,15 @@ class Trainer:
             self.uv_optimizer = UVOptimizer(
                 self.uv_param,
                 lr=config.uv_opt.lr,
-                max_iter=config.uv_opt.lbfgs_max_iter,
             )
             # 计算初始目标 UV 面积（用于面积保持）
             from src.uv.losses import _triangle_uv_areas
             with torch.no_grad():
                 init_uvs = self.uv_param.get_uvs()
                 self._uv_target_areas = _triangle_uv_areas(init_uvs, self.uv_param.get_uv_idx())
+            # 保存初始 UV 副本（用于对比图）
+            self._initial_uvs = init_uvs.detach().cpu()
+            self._initial_uv_idx = self.uv_param.get_uv_idx().cpu()
 
         # ---- 10. 训练历史记录 ----
         self.history: dict[str, list] = {"epoch": [], "loss": [], "psnr": []}
@@ -172,13 +175,17 @@ class Trainer:
     # UV helpers
     # ------------------------------------------------------------------
     def _sync_uvs_to_renderer(self) -> None:
-        """将优化后的 UV 坐标同步到渲染器。"""
+        """将优化后的 UV 坐标同步到渲染器（detach 断开 autograd）。"""
         if self.uv_param is not None:
-            new_uvs = self.uv_param.get_uvs().unsqueeze(0)  # [1, V, 2]
+            new_uvs = self.uv_param.get_uvs().detach().unsqueeze(0)  # [1, V, 2]
             self.renderer.set_uvs(new_uvs)
 
     def _uv_optimization_step(self, indices: list[int]) -> float:
-        """执行一步 UV L-BFGS 优化。"""
+        """执行一步 UV Adam 优化。
+
+        UV 步只优化几何失真，render loss detach 后作为 content-aware 权重。
+        论文: L_uv_step = λ_uv · SymDirichlet + λ_content · (SymDirichlet × L_diff_frozen)
+        """
         from src.uv.losses import SymDirichletLoss, AreaPreserveLoss
         from src.uv.aggregate import per_triangle_render_loss
 
@@ -186,16 +193,16 @@ class Trainer:
         area_preserve = AreaPreserveLoss()
         cfg = self.config.uv_opt
 
-        def closure():
-            self.uv_optimizer.zero_grad()
-            self._sync_uvs_to_renderer()
+        self.uv_optimizer.zero_grad()
+        self._sync_uvs_to_renderer()
 
-            total_loss = torch.tensor(0.0, device=self.device)
-            all_pixel_loss = []
-            all_tri_ids = []
-            all_masks = []
-            num_faces = self.faces.shape[0]
+        # ---- 计算 per-triangle render loss (detach, 仅作权重) ----
+        all_pixel_loss = []
+        all_tri_ids = []
+        all_masks = []
+        num_faces = self.faces.shape[0]
 
+        with torch.no_grad():
             for idx in indices:
                 img_np, camera = self.dataset[idx]
                 gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)
@@ -212,33 +219,35 @@ class Trainer:
 
                 mask_f = mask.unsqueeze(-1).float()
                 pixel_loss = (rendered - gt_linear).abs() * mask_f
-                total_loss = total_loss + pixel_loss.sum() / (mask.sum() * 3 + 1e-8)
 
-                all_pixel_loss.append(pixel_loss.detach())
-                all_tri_ids.append((rast[0, :, :, 0] * num_faces).long().unsqueeze(0))
+                all_pixel_loss.append(pixel_loss)
+                all_tri_ids.append(rast[0, :, :, 3].long().unsqueeze(0))
                 all_masks.append(mask.bool())
 
-            total_loss = total_loss / len(indices)
+        combined_pixel_loss = torch.cat(all_pixel_loss, dim=0)
+        combined_tri_ids = torch.cat(all_tri_ids, dim=0)
+        combined_masks = torch.cat(all_masks, dim=0)
+        tri_render_loss = per_triangle_render_loss(combined_pixel_loss, combined_tri_ids, combined_masks, num_faces)
 
-            uv_coords = self.uv_param.get_uvs()
-            verts_3d = self.vertices.to(self.device).squeeze(0)
-            faces_64 = self.faces.to(self.device).long()
+        # ---- UV loss: render loss 不参与梯度，只引导方向 ----
+        uv_coords = self.uv_param.get_uvs()
+        verts_3d = self.vertices.to(self.device).squeeze(0)
+        faces_64 = self.faces.to(self.device).long()
 
-            combined_pixel_loss = torch.cat(all_pixel_loss, dim=0)
-            combined_tri_ids = torch.cat(all_tri_ids, dim=0)
-            combined_masks = torch.cat(all_masks, dim=0)
-            tri_render_loss = per_triangle_render_loss(combined_pixel_loss, combined_tri_ids, combined_masks, num_faces)
+        # Content-aware: SymDirichlet × tri_render_loss (论文 λ_{I∘UV} = 5)
+        sd_content = sym_dirichlet(uv_coords, verts_3d, faces_64, tri_render_loss)
+        uv_loss = cfg.content_aware_weight * sd_content
 
-            sd_loss = sym_dirichlet(uv_coords, verts_3d, faces_64, tri_render_loss)
-            total_loss = total_loss + cfg.sym_dirichlet_weight * sd_loss
+        # 纯几何: SymDirichlet × uniform (论文 λ_uv = 0.01)
+        uniform_weight = torch.ones_like(tri_render_loss)
+        sd_geom = sym_dirichlet(uv_coords, verts_3d, faces_64, uniform_weight)
+        uv_loss = uv_loss + cfg.sym_dirichlet_weight * sd_geom
 
-            ap_loss = area_preserve(uv_coords, verts_3d, faces_64, self._uv_target_areas)
-            total_loss = total_loss + cfg.area_preserve_weight * ap_loss
+        # 面积保持
+        ap_loss = area_preserve(uv_coords, verts_3d, faces_64, self._uv_target_areas)
+        uv_loss = uv_loss + cfg.area_preserve_weight * ap_loss
 
-            total_loss.backward()
-            return total_loss
-
-        loss_val = self.uv_optimizer.step(closure)
+        loss_val = self.uv_optimizer.step(uv_loss)
         self._sync_uvs_to_renderer()
         return loss_val.item()
 
@@ -334,6 +343,8 @@ class Trainer:
         self.renderer = self._create_renderer(tex_res)
 
         for epoch in range(start_epoch, num_epochs):
+            t_epoch_start = __import__("time").perf_counter()
+
             # ---- 检查分辨率调度 ----
             target_res = self._current_resolution(epoch)
             if target_res != self.current_resolution:
@@ -346,14 +357,16 @@ class Trainer:
 
             epoch_loss = 0.0
 
-            # 判断是否启用 UV 交替优化
+            # 判断是否启用 UV 交替优化（三阶段：warmup → 交替 → finetune）
+            uv_cfg = self.config.uv_opt
+            uv_stop = uv_cfg.stop_epoch if uv_cfg.stop_epoch > 0 else num_epochs
             uv_active = (
                 self.uv_param is not None
-                and epoch >= self.config.uv_opt.start_epoch
+                and uv_cfg.start_epoch <= epoch < uv_stop
             )
 
             if uv_active:
-                # 交替优化：tex_steps_per_uv 步 Adam (纹理)，然后 1 步 L-BFGS (UV)
+                # 交替优化：tex_steps_per_uv 步 Adam (纹理)，然后 1 步 Adam (UV)
                 for _ in range(self.config.uv_opt.tex_steps_per_uv):
                     for idx in indices:
                         self.optimizer.zero_grad()
@@ -468,8 +481,15 @@ class Trainer:
             self.history["loss"].append(avg_loss)
             self.history["psnr"].append(psnr_val)
 
-            if (epoch + 1) % max(1, num_epochs // 10) == 0 or epoch == 0:
-                print(f"[Epoch {epoch+1}/{num_epochs}] loss={avg_loss:.6f} psnr={psnr_val:.2f}dB res={self.current_resolution}")
+            t_epoch = __import__("time").perf_counter() - t_epoch_start
+            if uv_active:
+                phase = "UV"
+            elif self.uv_param is not None and epoch >= self.config.uv_opt.stop_epoch > 0:
+                phase = "finetune"
+            else:
+                phase = "warmup"
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                print(f"[Epoch {epoch+1}/{num_epochs}] loss={avg_loss:.6f} psnr={psnr_val:.2f}dB res={self.current_resolution} {phase} | {t_epoch:.2f}s")
 
             # ---- 周期性 checkpoint ----
             if checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0:
@@ -524,11 +544,47 @@ class Trainer:
         fig.savefig(os.path.join(os.path.dirname(output_dir), "curves.png"), dpi=100)
         plt.close(fig)
 
+        # UV 对比图（仅 UV 优化启用时）
+        if self._initial_uvs is not None:
+            self._export_uv_compare(output_dir, epoch)
+
         # 着色模型特有输出
         self.logger.export_debug(
             self.model, self.renderer, self.dataset, output_dir, epoch,
             self.history, self.device, self.current_resolution,
         )
+
+    def _export_uv_compare(self, output_dir: str, epoch: int) -> None:
+        """导出初始 UV vs 当前 UV 对比图。"""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.tri as mtri
+
+        init_uvs = self._initial_uvs.numpy()       # [V, 2]
+        uv_idx = self._initial_uv_idx.numpy()       # [F, 3]
+
+        with torch.no_grad():
+            current_uvs = self.uv_param.get_uvs().cpu().numpy()  # [V, 2]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
+
+        for ax, uvs, title in [
+            (ax1, init_uvs, "Initial UV"),
+            (ax2, current_uvs, f"Current UV (epoch {epoch+1})"),
+        ]:
+            triang = mtri.Triangulation(uvs[:, 0], uvs[:, 1], uv_idx)
+            ax.triplot(triang, linewidth=0.1, alpha=0.5)
+            ax.set_xlim(-0.05, 1.05)
+            ax.set_ylim(-0.05, 1.05)
+            ax.set_aspect("equal")
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle("UV Layout Comparison", fontsize=13)
+        fig.tight_layout()
+        fig.savefig(os.path.join(output_dir, "uv_compare.png"), dpi=150)
+        plt.close(fig)
 
     # ------------------------------------------------------------------
     # Accessors

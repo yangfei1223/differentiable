@@ -165,11 +165,12 @@ class MeshData:
         return v, f, uv, uvi, n, ni, t, bt
 
 
-def load_mesh(path: str | Path) -> MeshData:
+def load_mesh(path: str | Path, xatlas_init: bool = False) -> MeshData:
     """加载 OBJ / GLB 网格文件。
 
     Args:
         path: 网格文件路径 (.obj / .glb / .gltf)。
+        xatlas_init: 是否用 xatlas 重新生成 UV（替代文件中的 UV）。
 
     Returns:
         MeshData 实例。
@@ -189,6 +190,12 @@ def load_mesh(path: str | Path) -> MeshData:
     vertices = np.array(mesh_obj.vertices, dtype=np.float64)
     faces = np.array(mesh_obj.faces, dtype=np.int64)
 
+    # 提取顶点法线（xatlas 需要重映射）
+    if hasattr(mesh_obj, 'vertex_normals'):
+        normals = np.array(mesh_obj.vertex_normals, dtype=np.float64)
+    else:
+        normals = None
+
     # 提取 UV 坐标
     if hasattr(mesh_obj.visual, "uv") and mesh_obj.visual.uv is not None:
         uvs = np.array(mesh_obj.visual.uv, dtype=np.float64)
@@ -204,13 +211,25 @@ def load_mesh(path: str | Path) -> MeshData:
         uvs = np.zeros((0, 2), dtype=np.float64)
         uv_idx = np.zeros_like(faces, dtype=np.int64)
 
-    # 提取顶点法线
-    if hasattr(mesh_obj, 'vertex_normals'):
-        normals = np.array(mesh_obj.vertex_normals, dtype=np.float64)
-    else:
-        normals = None
+    # xatlas UV 重新生成
+    if xatlas_init:
+        import xatlas
+        atlas = xatlas.Atlas()
+        atlas.add_mesh(vertices, faces)
+        atlas.generate()
+        vmapping, new_faces, new_uvs = atlas[0]  # 第一个 mesh
+        # 重映射顶点和属性
+        vertices = vertices[vmapping]
+        if normals is not None:
+            normals = normals[vmapping]
+        faces = new_faces.astype(np.int64)
+        uvs = new_uvs.astype(np.float64)
+        uv_idx = faces.copy()
+        normal_idx = faces.copy()
+        print(f"[xatlas] Generated UV: {uvs.shape[0]} verts, {faces.shape[0]} faces, "
+              f"UV range u=[{uvs[:,0].min():.3f}, {uvs[:,0].max():.3f}] v=[{uvs[:,1].min():.3f}, {uvs[:,1].max():.3f}]")
 
-    normal_idx = np.array(mesh_obj.faces, dtype=np.int64)
+    normal_idx = np.array(mesh_obj.faces, dtype=np.int64) if not xatlas_init else faces.copy()
 
     if normals is None:
         temp = MeshData(vertices=vertices, faces=faces, uvs=uvs, uv_idx=uv_idx,

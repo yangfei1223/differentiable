@@ -1,12 +1,10 @@
 render_mode: pbr
 
-export:
-  output_dir: "output_uvopt"
-
 data:
   mesh_path: data/piano_260604/scene/lowpoly.glb
   gt_dir: data/piano_260604/gt
   camera_path: data/piano_260604/cameras.json
+  xatlas_init: true
 
 texture:
   sh_order: 2
@@ -14,11 +12,11 @@ texture:
   target_resolution: 2048
 
 training:
-  num_epochs: 500
+  num_epochs: 501
   lr: 0.01
   batch_size: 4
   lr_decay: 0.5
-  lr_decay_epochs: [200, 350]
+  lr_decay_epochs: [300, 400]
   resolution_schedule:
     - epoch: 0
       resolution: 512
@@ -43,11 +41,16 @@ pbr:
   env_tv_weight: 0.0005
   env_l2_weight: 0.0001
 
+# 三阶段 UV 优化 (参考 Knodt et al. 2023):
+#   Stage 1 (warmup):   epoch 0~199    纯纹理，UV 冻结
+#   Stage 2 (UV+tex):   epoch 200~399  交替优化 UV + 纹理
+#   Stage 3 (finetune): epoch 400~499  纯纹理，UV 冻结
 uv_optimization:
   enabled: true
   lr: 0.001
   tex_steps_per_uv: 5
   sym_dirichlet_weight: 0.01
+  content_aware_weight: 5.0
   area_preserve_weight: 0.1
-  lbfgs_max_iter: 20
-  start_epoch: 50
+  start_epoch: 200
+  stop_epoch: 400

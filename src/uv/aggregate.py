@@ -27,8 +27,8 @@ def per_triangle_render_loss(
     flat_loss = scalar_loss[mask]
     flat_tri = tri_ids[mask]
 
-    # nvdiffrast rast triangle ID is normalized [0, 1]: tri_id = raw_id / num_faces
-    flat_tri_idx = (flat_tri.float() * num_faces).long().clamp(0, num_faces - 1)
+    # nvdiffrast rast channel 3 is 1-based triangle ID (integer)
+    flat_tri_idx = (flat_tri - 1).clamp(0, num_faces - 1).long()
 
     tri_loss_sum = torch.zeros(num_faces, device=pixel_loss.device, dtype=pixel_loss.dtype)
     tri_count = torch.zeros(num_faces, device=pixel_loss.device, dtype=pixel_loss.dtype)

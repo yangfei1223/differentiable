@@ -10,19 +10,19 @@ def test_uv_optimizer_step():
     uvs = np.ones((10, 2), dtype=np.float32) * 0.5
     uv_idx = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int64)
     param = UVParameterizer(uvs, uv_idx)
-    optimizer = UVOptimizer(param, lr=0.1, max_iter=5)
+    optimizer = UVOptimizer(param, lr=0.1)
 
-    def closure():
-        optimizer.zero_grad()
-        decoded = param.get_uvs()
-        loss = ((decoded - 0.7) ** 2).sum()
-        loss.backward()
-        return loss
+    optimizer.zero_grad()
+    decoded = param.get_uvs()
+    loss_before = ((decoded - 0.7) ** 2).sum()
+    loss_before_val = loss_before.item()
+    optimizer.step(loss_before)
 
-    loss_before = closure().item()
-    optimizer.step(closure)
-    loss_after = closure().item()
-    assert loss_after < loss_before, f"Loss should decrease: {loss_before} -> {loss_after}"
+    optimizer.zero_grad()
+    decoded = param.get_uvs()
+    loss_after = ((decoded - 0.7) ** 2).sum()
+    loss_after_val = loss_after.item()
+    assert loss_after_val < loss_before_val, f"Loss should decrease: {loss_before_val} -> {loss_after_val}"
 
 
 def test_uv_optimizer_zero_grad():
@@ -33,7 +33,7 @@ def test_uv_optimizer_zero_grad():
     uvs = np.ones((10, 2), dtype=np.float32) * 0.5
     uv_idx = np.zeros((5, 3), dtype=np.int64)
     param = UVParameterizer(uvs, uv_idx)
-    optimizer = UVOptimizer(param, lr=0.1, max_iter=5)
+    optimizer = UVOptimizer(param, lr=0.1)
 
     decoded = param.get_uvs()
     decoded.sum().backward()

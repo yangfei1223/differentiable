@@ -16,9 +16,10 @@ def test_uv_opt_config_defaults():
     assert cfg.lr == 0.001
     assert cfg.tex_steps_per_uv == 5
     assert cfg.sym_dirichlet_weight == 0.01
+    assert cfg.content_aware_weight == 5.0
     assert cfg.area_preserve_weight == 0.1
-    assert cfg.lbfgs_max_iter == 20
     assert cfg.start_epoch == 100
+    assert cfg.stop_epoch == -1
 
 
 def test_uv_opt_config_from_yaml(tmp_path):

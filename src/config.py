@@ -24,9 +24,10 @@ class UVOptConfig:
     lr: float = 0.001
     tex_steps_per_uv: int = 5
     sym_dirichlet_weight: float = 0.01
+    content_aware_weight: float = 5.0
     area_preserve_weight: float = 0.1
-    lbfgs_max_iter: int = 20
     start_epoch: int = 100
+    stop_epoch: int = -1   # -1 = 不停，继续到训练结束
 
 
 @dataclass
@@ -34,6 +35,7 @@ class DataConfig:
     mesh_path: str = "data/scene/lowpoly.obj"
     gt_dir: str = "data/gt"
     camera_path: str = "data/cameras.json"
+    xatlas_init: bool = False  # 用 xatlas 重新生成 UV
 
 
 @dataclass
