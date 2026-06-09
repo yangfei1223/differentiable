@@ -247,3 +247,116 @@ def render_video(
     writer.release()
     print(f"  [Video] Saved: {output_path}")
     return output_path
+
+
+def render_video_multi(
+    mesh,
+    renderers: dict,
+    shading_model,
+    submesh_names: list[str],
+    output_path: str,
+    center=None,
+    radius=None,
+    height=None,
+    fov_deg=None,
+    num_frames: int = 120,
+    resolution: int = 1024,
+    fps: int = 30,
+    device: str = "cuda",
+    fill_ratio: float = 0.6,
+) -> str:
+    """Multi-mesh video: render all submeshes per frame, composite.
+
+    Same camera logic as render_video, but loops over submesh renderers
+    per frame and composites the results.
+
+    Args:
+        mesh: MeshData or MultiMeshData — used for bbox camera auto-calculation.
+        renderers: Dict of submesh_name → DifferentiableRenderer.
+        shading_model: PBRShadingModel with shade_submesh().
+        submesh_names: Ordered list of submesh names.
+        output_path: Output mp4 path.
+        (remaining args same as render_video)
+    """
+    # ---- 1. 从 mesh bounding box 自动计算相机参数 ----
+    # Get all vertices for bbox calculation
+    if hasattr(mesh, 'submeshes'):
+        # MultiMeshData — concatenate all submesh vertices
+        all_verts = np.concatenate([s.vertices for s in mesh.submeshes], axis=0)
+    else:
+        all_verts = mesh.vertices
+
+    v_min = all_verts.min(axis=0)
+    v_max = all_verts.max(axis=0)
+    bbox_size = v_max - v_min
+    bbox_max_dim = float(bbox_size.max())
+
+    if center is None:
+        center_np = (v_min + v_max) / 2.0
+    else:
+        center_np = np.array(center, dtype=np.float64)
+
+    dists = np.linalg.norm(all_verts - center_np, axis=1)
+    bsphere_radius = float(dists.max())
+
+    if radius is None:
+        radius = bsphere_radius * 2.5
+    if height is None:
+        height = center_np[1] + bsphere_radius * 1.2
+    if fov_deg is None:
+        cam_y = height
+        cam_dist = math.sqrt(radius ** 2 + (cam_y - center_np[1]) ** 2)
+        half_angle = math.atan(bsphere_radius / cam_dist)
+        fov_deg = math.degrees(2.0 * half_angle / fill_ratio)
+        fov_deg = max(20.0, min(fov_deg, 70.0))
+
+    print(f"  [Video Multi] Auto camera: radius={radius:.2f}, height={height:.2f}, fov={fov_deg:.1f}°")
+
+    # ---- 2. 生成轨道相机 ----
+    cameras = orbit_cameras(
+        center=center_np, radius=radius, height=height,
+        num_frames=num_frames, fov_deg=fov_deg, resolution=resolution,
+    )
+
+    # ---- 3. 创建视频写入器 ----
+    output_path = str(Path(output_path).resolve())
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (resolution, resolution))
+    if not writer.isOpened():
+        raise RuntimeError(f"无法创建视频文件: {output_path}")
+
+    # ---- 4. 逐帧渲染 (multi-mesh composite) ----
+    for i, cam in enumerate(cameras):
+        with torch.no_grad():
+            rendered_total = torch.zeros(1, resolution, resolution, 3, device=device)
+            mask_total = torch.zeros(1, resolution, resolution, device=device)
+
+            for sub_name in submesh_names:
+                sub_renderer = renderers[sub_name]
+                rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(cam)
+                rgb_sub, mask_sub = shading_model.shade_submesh(
+                    sub_name, rast, texc, wpos, inorm, vdir, cam, resolution, tang, btang)
+                rendered_total = rendered_total + rgb_sub
+                mask_total = torch.max(mask_total, mask_sub)
+
+            rgb = rendered_total
+            mask = mask_total
+
+        frame = rgb[0].detach().cpu().flip(0).clamp(0.0, 1.0).pow(1.0 / 2.2).numpy()
+        frame = (frame * 255).astype(np.uint8)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        mask_np = mask[0].detach().cpu().flip(0).numpy()
+        bg = mask_np < 0.5
+        frame[bg] = 0
+
+        writer.write(frame)
+
+        if (i + 1) % 30 == 0 or i == 0:
+            print(f"  [Video Multi] Frame {i+1}/{num_frames}")
+
+    writer.release()
+    print(f"  [Video Multi] Saved: {output_path}")
+    return output_path

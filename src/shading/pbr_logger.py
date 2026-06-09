@@ -42,10 +42,17 @@ class PBRLogger(ShadingLogger):
         self._export_brdf_lut_image(model.brdf_lut, output_dir)
         print(f"  [Debug] PBR textures + BRDF LUT → {output_dir}")
 
-        # 2. Compare: GT | Rendered / Diffuse | Specular
-        self._export_compare(model, renderer, dataset, output_dir, device, current_resolution)
+        is_multi = kwargs.get("is_multi", False)
+        renderers = kwargs.get("renderers", None)
+        submesh_names = kwargs.get("submesh_names", None)
 
-        # 3. 视频: Full / Diffuse / Specular
+        # 2. Compare images
+        if is_multi and renderers is not None:
+            self._export_compare_multi(model, renderers, submesh_names, dataset, output_dir, device, current_resolution)
+        else:
+            self._export_compare(model, renderer, dataset, output_dir, device, current_resolution)
+
+        # 3. Videos
         mesh = load_mesh(self.config.data.mesh_path)
         cfg = self.config
         vk = dict(
@@ -54,17 +61,18 @@ class PBRLogger(ShadingLogger):
             fov_deg=cfg.video.fov_deg, resolution=cfg.video.resolution, fps=cfg.video.fps,
         )
 
-        # Full PBR
-        render_video(mesh=mesh, shading_model=model,
-                     output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
-
-        # Diffuse only: 置零 specular (metallic=0, roughness=1)
-        self.render_component_video(model, mesh, output_dir, "orbit_diffuse.mp4",
-                                    mode="diffuse", **vk)
-
-        # Specular only: 置零 diffuse (metallic=1)
-        self.render_component_video(model, mesh, output_dir, "orbit_specular.mp4",
-                                    mode="specular", **vk)
+        if is_multi:
+            from src.video import render_video_multi
+            render_video_multi(mesh=mesh, renderers=renderers, shading_model=model,
+                              submesh_names=submesh_names,
+                              output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
+        else:
+            render_video(mesh=mesh, shading_model=model,
+                         output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
+            self.render_component_video(model, mesh, output_dir, "orbit_diffuse.mp4",
+                                        mode="diffuse", **vk)
+            self.render_component_video(model, mesh, output_dir, "orbit_specular.mp4",
+                                        mode="specular", **vk)
 
         print(f"  [Debug] compare + textures + video → {output_dir}")
 
@@ -99,6 +107,64 @@ class PBRLogger(ShadingLogger):
             panels = [
                 (gt, "GT"),
                 (to_bgr(rgb_full), "Rendered"),
+                (to_bgr(diffuse), "Diffuse"),
+                (to_bgr(specular), "Specular"),
+            ]
+
+            th = min(p[0].shape[0] for p in panels)
+            rs = []
+            for img, label in panels:
+                h, w = img.shape[:2]
+                r = cv2.resize(img, (w * th // h, th))
+                cv2.putText(r, label, (8, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                rs.append(r)
+
+            canvas = np.concatenate([
+                np.concatenate([rs[0], rs[1]], axis=1),
+                np.concatenate([rs[2], rs[3]], axis=1),
+            ], axis=0)
+            cv2.imwrite(os.path.join(output_dir, f"compare_{ci:04d}.png"), canvas)
+
+    def _export_compare_multi(self, model, renderers, submesh_names, dataset, output_dir, device, resolution):
+        """Multi-mesh compare: render all submeshes, composite, compare with GT."""
+        import cv2
+
+        num_views = len(dataset)
+        indices = [int(i * num_views / min(4, num_views)) for i in range(min(4, num_views))]
+
+        for ci, idx in enumerate(indices):
+            img_np, camera = dataset[idx]
+
+            with torch.no_grad():
+                rendered_total = torch.zeros(1, resolution, resolution, 3, device=device)
+                mask_total = torch.zeros(1, resolution, resolution, device=device)
+
+                for sub_name in submesh_names:
+                    sub_renderer = renderers[sub_name]
+                    rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
+                    rgb_sub, mask_sub = model.shade_submesh(
+                        sub_name, rast, texc, wpos, inorm, vdir, camera, resolution, tang, btang)
+                    rendered_total = rendered_total + rgb_sub
+                    mask_total = torch.max(mask_total, mask_sub)
+
+            debug = model.get_debug_info()
+            diffuse = debug.get("diffuse", rendered_total * 0)
+            specular = debug.get("specular", rendered_total * 0)
+
+            mask_total = mask_total.flip(1)
+            mask_np = mask_total[0].cpu().numpy()
+
+            def to_bgr(t):
+                img = t[0].flip(0).clamp(0, 1).pow(1 / 2.2).detach().cpu().numpy()
+                img = (img * 255).astype(np.uint8)
+                bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                bgr[mask_np < 0.5] = 0
+                return bgr
+
+            gt = cv2.cvtColor((img_np.transpose(1, 2, 0) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            panels = [
+                (gt, "GT"),
+                (to_bgr(rendered_total), "Rendered"),
                 (to_bgr(diffuse), "Diffuse"),
                 (to_bgr(specular), "Specular"),
             ]
