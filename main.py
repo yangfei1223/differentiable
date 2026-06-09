@@ -22,6 +22,8 @@ def parse_args():
                         help="导出/视频模式下 SH 纹理检查点路径 (.pt)")
     parser.add_argument("--resume", type=str, default=None,
                         help="断点续训的 checkpoint 路径 (.pt)")
+    parser.add_argument("--output", type=str, default=None,
+                        help="输出目录 (覆盖自动推导)")
     return parser.parse_args()
 
 
@@ -41,7 +43,11 @@ def main():
     # PBR 模式加后缀避免覆盖 SH 结果: output/helmet_260604_pbr
     if cfg.render_mode != "sh":
         dataset_name = f"{dataset_name}_{cfg.render_mode}"
-    output_base = Path(cfg.export.output_dir) / dataset_name
+
+    if args.output:
+        output_base = Path(args.output)
+    else:
+        output_base = Path(cfg.export.output_dir) / dataset_name
 
     if args.mode == "train":
         logger.info("=" * 60)
