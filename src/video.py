@@ -327,22 +327,23 @@ def render_video_multi(
     if not writer.isOpened():
         raise RuntimeError(f"无法创建视频文件: {output_path}")
 
-    # ---- 4. 逐帧渲染 (multi-mesh composite) ----
+    # ---- 4. 逐帧渲染 (multi-mesh composite, depth-based) ----
     for i, cam in enumerate(cameras):
         with torch.no_grad():
-            rendered_total = torch.zeros(1, resolution, resolution, 3, device=device)
-            mask_total = torch.zeros(1, resolution, resolution, device=device)
+            rgb = torch.zeros(1, resolution, resolution, 3, device=device)
+            depth_buf = torch.full((1, resolution, resolution), float("inf"), device=device)
+            mask = torch.zeros(1, resolution, resolution, device=device)
 
             for sub_name in submesh_names:
                 sub_renderer = renderers[sub_name]
                 rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(cam)
                 rgb_sub, mask_sub = shading_model.shade_submesh(
                     sub_name, rast, texc, wpos, inorm, vdir, cam, resolution, tang, btang)
-                rendered_total = rendered_total + rgb_sub
-                mask_total = torch.max(mask_total, mask_sub)
-
-            rgb = rendered_total
-            mask = mask_total
+                sub_depth = rast[..., 2]
+                write = (mask_sub > 0.5) & (sub_depth < depth_buf)
+                rgb = torch.where(write.unsqueeze(-1), rgb_sub, rgb)
+                depth_buf = torch.where(write, sub_depth, depth_buf)
+                mask = torch.max(mask, mask_sub)
 
         frame = rgb[0].detach().cpu().flip(0).clamp(0.0, 1.0).pow(1.0 / 2.2).numpy()
         frame = (frame * 255).astype(np.uint8)

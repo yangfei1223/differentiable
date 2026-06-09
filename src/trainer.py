@@ -324,19 +324,21 @@ class Trainer:
                         self.model.features_dc, self.model.features_rest, camera,
                     )
                 elif self.is_multi:
-                    # Multi-mesh PBR path
+                    # Multi-mesh PBR path: depth-based compositing
                     res = self.current_resolution
-                    rendered_total = torch.zeros(1, res, res, 3, device=self.device)
-                    mask_total = torch.zeros(1, res, res, device=self.device)
+                    rendered = torch.zeros(1, res, res, 3, device=self.device)
+                    depth_buf = torch.full((1, res, res), float("inf"), device=self.device)
+                    mask = torch.zeros(1, res, res, device=self.device)
                     for sub_name in self.submesh_names:
                         sub_renderer = self.renderers[sub_name]
                         rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
                         rgb_sub, mask_sub = self.model.shade_submesh(
                             sub_name, rast, texc, wpos, inorm, vdir, camera, res, tang, btang)
-                        rendered_total = rendered_total + rgb_sub
-                        mask_total = torch.max(mask_total, mask_sub)
-                    rendered = rendered_total
-                    mask = mask_total
+                        sub_depth = rast[..., 2]  # NDC depth: smaller = closer
+                        write = (mask_sub > 0.5) & (sub_depth < depth_buf)
+                        rendered = torch.where(write.unsqueeze(-1), rgb_sub, rendered)
+                        depth_buf = torch.where(write, sub_depth, depth_buf)
+                        mask = torch.max(mask, mask_sub)
                 else:
                     rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
                     rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
@@ -398,17 +400,19 @@ class Trainer:
                     )
                 elif self.is_multi:
                     _res = self.current_resolution
-                    _rendered_total = torch.zeros(1, _res, _res, 3, device=self.device)
-                    _mask_total = torch.zeros(1, _res, _res, device=self.device)
+                    _rendered = torch.zeros(1, _res, _res, 3, device=self.device)
+                    _depth_buf = torch.full((1, _res, _res), float("inf"), device=self.device)
+                    _mask = torch.zeros(1, _res, _res, device=self.device)
                     for _sub_name in self.submesh_names:
                         _sub_renderer = self.renderers[_sub_name]
                         _rast, _texc, _wpos, _inorm, _vdir, _tang, _btang = _sub_renderer.rasterize_and_interpolate(_cam)
                         _rgb_sub, _mask_sub = self.model.shade_submesh(
                             _sub_name, _rast, _texc, _wpos, _inorm, _vdir, _cam, _res, _tang, _btang)
-                        _rendered_total = _rendered_total + _rgb_sub
-                        _mask_total = torch.max(_mask_total, _mask_sub)
-                    _rendered = _rendered_total
-                    _mask = _mask_total
+                        _sub_depth = _rast[..., 2]
+                        _write = (_mask_sub > 0.5) & (_sub_depth < _depth_buf)
+                        _rendered = torch.where(_write.unsqueeze(-1), _rgb_sub, _rendered)
+                        _depth_buf = torch.where(_write, _sub_depth, _depth_buf)
+                        _mask = torch.max(_mask, _mask_sub)
                 else:
                     _rast, _texc, _wpos, _inorm, _vdir, _tang, _btang = self.renderer.rasterize_and_interpolate(_cam)
                     _rendered, _mask = self.model.shade(_rast, _texc, _wpos, _inorm, _vdir, _cam, self.current_resolution, _tang, _btang)

@@ -136,23 +136,27 @@ class PBRLogger(ShadingLogger):
             img_np, camera = dataset[idx]
 
             with torch.no_grad():
-                rendered_total = torch.zeros(1, resolution, resolution, 3, device=device)
-                mask_total = torch.zeros(1, resolution, resolution, device=device)
+                rendered = torch.zeros(1, resolution, resolution, 3, device=device)
+                depth_buf = torch.full((1, resolution, resolution), float("inf"), device=device)
+                mask = torch.zeros(1, resolution, resolution, device=device)
 
                 for sub_name in submesh_names:
                     sub_renderer = renderers[sub_name]
                     rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
                     rgb_sub, mask_sub = model.shade_submesh(
                         sub_name, rast, texc, wpos, inorm, vdir, camera, resolution, tang, btang)
-                    rendered_total = rendered_total + rgb_sub
-                    mask_total = torch.max(mask_total, mask_sub)
+                    sub_depth = rast[..., 2]
+                    write = (mask_sub > 0.5) & (sub_depth < depth_buf)
+                    rendered = torch.where(write.unsqueeze(-1), rgb_sub, rendered)
+                    depth_buf = torch.where(write, sub_depth, depth_buf)
+                    mask = torch.max(mask, mask_sub)
 
             debug = model.get_debug_info()
-            diffuse = debug.get("diffuse", rendered_total * 0)
-            specular = debug.get("specular", rendered_total * 0)
+            diffuse = debug.get("diffuse", rendered * 0)
+            specular = debug.get("specular", rendered * 0)
 
-            mask_total = mask_total.flip(1)
-            mask_np = mask_total[0].cpu().numpy()
+            mask = mask.flip(1)
+            mask_np = mask[0].cpu().numpy()
 
             def to_bgr(t):
                 img = t[0].flip(0).clamp(0, 1).pow(1 / 2.2).detach().cpu().numpy()
@@ -164,7 +168,7 @@ class PBRLogger(ShadingLogger):
             gt = cv2.cvtColor((img_np.transpose(1, 2, 0) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
             panels = [
                 (gt, "GT"),
-                (to_bgr(rendered_total), "Rendered"),
+                (to_bgr(rendered), "Rendered"),
                 (to_bgr(diffuse), "Diffuse"),
                 (to_bgr(specular), "Specular"),
             ]
