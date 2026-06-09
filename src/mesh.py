@@ -9,6 +9,8 @@ import numpy as np
 import torch
 import trimesh
 
+from src.gltf_loader import load_gltf
+
 
 @dataclass
 class MeshData:
@@ -165,16 +167,125 @@ class MeshData:
         return v, f, uv, uvi, n, ni, t, bt
 
 
-def load_mesh(path: str | Path) -> MeshData:
+@dataclass
+class SubMeshData:
+    """Single submesh extracted from a glTF file.
+
+    Similar to MeshData but represents one primitive within a multi-mesh scene.
+    """
+    name: str
+    vertices: np.ndarray
+    faces: np.ndarray
+    uvs: np.ndarray
+    uv_idx: np.ndarray
+    normals: np.ndarray = None
+    normal_idx: np.ndarray = None
+    tangents: np.ndarray = None
+    bitangents: np.ndarray = None
+    material_name: str | None = None
+
+    @property
+    def num_vertices(self) -> int:
+        return self.vertices.shape[0]
+
+    @property
+    def num_faces(self) -> int:
+        return self.faces.shape[0]
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SubMeshData:
+        """Construct from a gltf_loader dict."""
+        sub = cls(
+            name=d["name"],
+            vertices=d["vertices"],
+            faces=d["faces"],
+            uvs=d["uvs"],
+            uv_idx=d["uv_idx"],
+            normals=d.get("normals"),
+            normal_idx=d.get("normal_idx"),
+            material_name=d.get("material_name"),
+        )
+        # Compute normals if missing
+        if sub.normals is None:
+            sub.normals = MeshData(
+                vertices=sub.vertices, faces=sub.faces,
+                uvs=sub.uvs, uv_idx=sub.uv_idx,
+            ).compute_vertex_normals()
+        if sub.normal_idx is None:
+            sub.normal_idx = np.array(sub.faces, dtype=np.int64)
+        # Compute tangents
+        temp = MeshData(
+            vertices=sub.vertices, faces=sub.faces,
+            uvs=sub.uvs, uv_idx=sub.uv_idx,
+            normals=sub.normals, normal_idx=sub.normal_idx,
+        )
+        sub.tangents, sub.bitangents = temp.compute_vertex_tangents()
+        return sub
+
+    def to_torch(
+        self,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Convert to PyTorch tensors (same format as MeshData.to_torch)."""
+        v = torch.from_numpy(self.vertices.astype(np.float32))
+        f = torch.from_numpy(self.faces.astype(np.int64))
+        uv = torch.from_numpy(self.uvs.astype(np.float32))
+        uvi = torch.from_numpy(self.uv_idx.astype(np.int64))
+        n = torch.from_numpy(self.normals.astype(np.float32)) if self.normals is not None else torch.zeros_like(v)
+        ni = torch.from_numpy(self.normal_idx.astype(np.int64)) if self.normal_idx is not None else torch.zeros_like(f)
+        t = torch.from_numpy(self.tangents.astype(np.float32)) if self.tangents is not None else torch.zeros_like(v)
+        bt = torch.from_numpy(self.bitangents.astype(np.float32)) if self.bitangents is not None else torch.zeros_like(v)
+        return v, f, uv, uvi, n, ni, t, bt
+
+
+@dataclass
+class MultiMeshData:
+    """Collection of submeshes from a multi-mesh glTF file."""
+    submeshes: list[SubMeshData]
+
+    @property
+    def num_submeshes(self) -> int:
+        return len(self.submeshes)
+
+    @property
+    def total_vertices(self) -> int:
+        return sum(s.num_vertices for s in self.submeshes)
+
+    @property
+    def total_faces(self) -> int:
+        return sum(s.num_faces for s in self.submeshes)
+
+
+def load_mesh(path: str | Path) -> MeshData | MultiMeshData:
     """加载 OBJ / GLB 网格文件。
 
     Args:
         path: 网格文件路径 (.obj / .glb / .gltf)。
 
     Returns:
-        MeshData 实例。
+        MeshData for single-mesh files, MultiMeshData for multi-mesh GLBs.
     """
     path = Path(path)
+
+    if path.suffix.lower() in (".glb", ".gltf"):
+        subs = load_gltf(path)
+        if len(subs) == 1:
+            # Single mesh — use existing MeshData path
+            d = subs[0]
+            mesh_data = MeshData(
+                vertices=d["vertices"], faces=d["faces"],
+                uvs=d["uvs"], uv_idx=d["uv_idx"],
+                normals=d.get("normals"), normal_idx=d.get("normal_idx"),
+            )
+            if mesh_data.normals is None:
+                mesh_data.normals = mesh_data.compute_vertex_normals()
+            mesh_data.tangents, mesh_data.bitangents = mesh_data.compute_vertex_tangents()
+            return mesh_data
+        else:
+            # Multi mesh
+            submesh_list = [SubMeshData.from_dict(d) for d in subs]
+            return MultiMeshData(submeshes=submesh_list)
+
+    # OBJ fallback (existing trimesh path)
     scene_or_mesh = trimesh.load(str(path), force="mesh", process=False)
 
     # trimesh.load 在某些情况下返回 Scene，统一取第一个 geometry

@@ -212,3 +212,45 @@ f 1/1/1 2/2/2 3/3/3
     assert mesh.normals is not None
     assert mesh.normals.shape[0] == 3
     assert mesh.normals.shape[1] == 3
+
+
+class TestSubMeshData:
+    def test_from_gltf_dict(self):
+        """SubMeshData should be constructable from gltf_loader dict."""
+        from src.mesh import SubMeshData
+        d = {
+            "name": "test_mesh",
+            "vertices": np.random.randn(100, 3).astype(np.float64),
+            "faces": np.array([[0, 1, 2]] * 10, dtype=np.int64),
+            "uvs": np.random.rand(100, 2).astype(np.float64),
+            "uv_idx": np.array([[0, 1, 2]] * 10, dtype=np.int64),
+            "normals": np.random.randn(100, 3).astype(np.float64),
+            "normal_idx": np.array([[0, 1, 2]] * 10, dtype=np.int64),
+            "material_name": "test_mat",
+        }
+        sub = SubMeshData.from_dict(d)
+        assert sub.name == "test_mesh"
+        assert sub.vertices.shape == (100, 3)
+        assert sub.num_faces == 10
+        assert sub.material_name == "test_mat"
+        assert sub.tangents is not None
+        assert sub.tangents.shape == (100, 3)
+
+
+class TestMultiMeshData:
+    def test_from_gltf_piano(self):
+        """Loading piano lowpoly should return MultiMeshData with 6 submeshes."""
+        from src.mesh import load_mesh, MultiMeshData
+        mesh = load_mesh("data/piano_260604/scene/lowpoly.glb")
+        assert isinstance(mesh, MultiMeshData)
+        assert mesh.num_submeshes == 6
+        for sub in mesh.submeshes:
+            assert sub.vertices.shape[1] == 3
+            assert sub.tangents is not None
+
+    def test_single_mesh_still_works(self):
+        """Loading single-mesh helmet should still return MeshData."""
+        from src.mesh import load_mesh, MeshData
+        mesh = load_mesh("data/helmet_260604/scene/lowpoly.glb")
+        assert isinstance(mesh, MeshData)
+        assert mesh.vertices.shape[1] == 3
