@@ -28,6 +28,7 @@ class SHLogger(ShadingLogger):
     def export_debug(
         self, model, renderer, dataset, output_dir: str, epoch: int,
         history: dict, device: str, current_resolution: int,
+        **kwargs,
     ) -> None:
         import cv2
         from src.exporter import export_diffuse_texture

@@ -36,6 +36,7 @@ class ShadingLogger:
         history: dict,
         device: str,
         current_resolution: int,
+        **kwargs,
     ) -> None:
         """导出调试可视化（compare 图 + 纹理 + 视频）。"""
         raise NotImplementedError

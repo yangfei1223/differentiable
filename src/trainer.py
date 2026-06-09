@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 from src.config import Config, ResolutionStep
 from src.dataset import GTDataset
 from src.losses import CombinedLoss
-from src.mesh import load_mesh
+from src.mesh import load_mesh, MeshData, MultiMeshData
 from src.renderer import DifferentiableRenderer
 from src.seam_padding import dilate_texture
 from src.utils import vis, vis_pair
@@ -36,7 +36,17 @@ class Trainer:
 
         # ---- 1. 加载网格 ----
         mesh = load_mesh(config.data.mesh_path)
-        self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = mesh.to_torch()
+
+        self.is_multi = isinstance(mesh, MultiMeshData)
+        self.renderers: dict[str, DifferentiableRenderer] = {}
+        self.submesh_names: list[str] = []
+
+        if self.is_multi:
+            self.multi_mesh = mesh
+            self.submesh_names = [s.name for s in mesh.submeshes]
+            self._submesh_lookup = {s.name: s for s in mesh.submeshes}
+        else:
+            self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = mesh.to_torch()
 
         # ---- 2. 创建数据集 ----
         self.dataset = GTDataset(
@@ -50,7 +60,10 @@ class Trainer:
         else:
             from src.shading import create_shading_model
             self.model = create_shading_model(config.render_mode, config)
-        self.model.init_textures(config.texture.base_resolution)
+        if self.is_multi:
+            self.model.init_textures(config.texture.base_resolution, submesh_names=self.submesh_names)
+        else:
+            self.model.init_textures(config.texture.base_resolution)
 
         # ---- 4. 优化器 ----
         self._rebuild_optimizer()
@@ -78,7 +91,17 @@ class Trainer:
 
         # ---- 7. 当前分辨率 & 渲染器 ----
         self.current_resolution = self._current_resolution(0)
-        self.renderer = self._create_renderer(self.current_resolution)
+        if self.is_multi:
+            self.renderer = None  # multi-mesh uses self.renderers dict
+            for sub in self.multi_mesh.submeshes:
+                v, f, uv, uvi, n, ni, t, bt = sub.to_torch()
+                self.renderers[sub.name] = DifferentiableRenderer(
+                    vertices=v, faces=f, uvs=uv, uv_idx=uvi,
+                    normals=n, normal_idx=ni, tangents=t, bitangents=bt,
+                    resolution=self.current_resolution, device=self.device,
+                )
+        else:
+            self.renderer = self._create_renderer(self.current_resolution)
 
         # ---- 8. 训练历史记录 ----
         self.history: dict[str, list] = {"epoch": [], "loss": [], "psnr": []}
@@ -129,25 +152,48 @@ class Trainer:
 
     def _resize_textures(self, new_res: int) -> None:
         """双线性插值将材质纹理缩放到 new_res，并重建优化器。"""
-        old_res = self.model.get_material_texture().shape[1]
-        if old_res == new_res:
-            return
-
-        tex = self.model.get_material_texture().to(self.device)
-        tex = tex.permute(0, 3, 1, 2)
-        tex = F.interpolate(tex, size=(new_res, new_res), mode="bilinear", align_corners=False)
-        tex = tex.permute(0, 2, 3, 1)
-        self.model.set_material_texture(tex.contiguous())
+        if self.is_multi:
+            old_textures = self.model.get_material_texture()  # dict
+            old_res = next(iter(old_textures.values())).shape[1]
+            if old_res == new_res:
+                return
+            new_textures = {}
+            for name, tex in old_textures.items():
+                tex = tex.to(self.device).permute(0, 3, 1, 2)
+                tex = F.interpolate(tex, size=(new_res, new_res), mode="bilinear", align_corners=False)
+                tex = tex.permute(0, 2, 3, 1)
+                new_textures[name] = tex.contiguous()
+            self.model.set_material_texture(new_textures)
+        else:
+            old_res = self.model.get_material_texture().shape[1]
+            if old_res == new_res:
+                return
+            tex = self.model.get_material_texture().to(self.device)
+            tex = tex.permute(0, 3, 1, 2)
+            tex = F.interpolate(tex, size=(new_res, new_res), mode="bilinear", align_corners=False)
+            tex = tex.permute(0, 2, 3, 1)
+            self.model.set_material_texture(tex.contiguous())
         self._rebuild_optimizer()
 
     def _apply_seam_padding(self) -> None:
         """执行 seam padding：膨胀纹理中的空白区域。"""
         radius = self.config.seam_padding.dilation_radius
-        tex = self.model.get_material_texture().to(self.device)
-        H, W = tex.shape[1], tex.shape[2]
-        valid_mask = torch.ones(1, H, W, 1, device=self.device)
-        tex = dilate_texture(tex, valid_mask, radius=radius).contiguous()
-        self.model.set_material_texture(tex)
+        if self.is_multi:
+            old_textures = self.model.get_material_texture()  # dict
+            new_textures = {}
+            for name, tex in old_textures.items():
+                tex = tex.to(self.device)
+                H, W = tex.shape[1], tex.shape[2]
+                valid_mask = torch.ones(1, H, W, 1, device=self.device)
+                tex = dilate_texture(tex, valid_mask, radius=radius).contiguous()
+                new_textures[name] = tex
+            self.model.set_material_texture(new_textures)
+        else:
+            tex = self.model.get_material_texture().to(self.device)
+            H, W = tex.shape[1], tex.shape[2]
+            valid_mask = torch.ones(1, H, W, 1, device=self.device)
+            tex = dilate_texture(tex, valid_mask, radius=radius).contiguous()
+            self.model.set_material_texture(tex)
         self._rebuild_optimizer()
 
     # ------------------------------------------------------------------
@@ -227,17 +273,39 @@ class Trainer:
         num_views = len(self.dataset)
 
         # 确保渲染器与当前纹理分辨率匹配
-        tex_res = self.model.get_material_texture().shape[1]
+        if self.is_multi:
+            tex_res = next(iter(self.model.get_material_texture().values())).shape[1]
+        else:
+            tex_res = self.model.get_material_texture().shape[1]
         self.current_resolution = tex_res
-        self.renderer = self._create_renderer(tex_res)
+
+        if self.is_multi:
+            for sub_name in self.submesh_names:
+                v, f, uv, uvi, n, ni, t, bt = self._submesh_lookup[sub_name].to_torch()
+                self.renderers[sub_name] = DifferentiableRenderer(
+                    vertices=v, faces=f, uvs=uv, uv_idx=uvi,
+                    normals=n, normal_idx=ni, tangents=t, bitangents=bt,
+                    resolution=tex_res, device=self.device,
+                )
+        else:
+            self.renderer = self._create_renderer(tex_res)
 
         for epoch in range(start_epoch, num_epochs):
             # ---- 检查分辨率调度 ----
             target_res = self._current_resolution(epoch)
             if target_res != self.current_resolution:
                 self._resize_textures(target_res)
-                self.renderer = self._create_renderer(target_res)
                 self.current_resolution = target_res
+                if self.is_multi:
+                    for sub_name in self.submesh_names:
+                        v, f, uv, uvi, n, ni, t, bt = self._submesh_lookup[sub_name].to_torch()
+                        self.renderers[sub_name] = DifferentiableRenderer(
+                            vertices=v, faces=f, uvs=uv, uv_idx=uvi,
+                            normals=n, normal_idx=ni, tangents=t, bitangents=bt,
+                            resolution=target_res, device=self.device,
+                        )
+                else:
+                    self.renderer = self._create_renderer(target_res)
 
             # ---- 随机采样 batch ----
             indices = random.sample(range(num_views), min(batch_size, num_views))
@@ -255,6 +323,20 @@ class Trainer:
                     rendered, mask, _ = self.renderer.render(
                         self.model.features_dc, self.model.features_rest, camera,
                     )
+                elif self.is_multi:
+                    # Multi-mesh PBR path
+                    res = self.current_resolution
+                    rendered_total = torch.zeros(1, res, res, 3, device=self.device)
+                    mask_total = torch.zeros(1, res, res, device=self.device)
+                    for sub_name in self.submesh_names:
+                        sub_renderer = self.renderers[sub_name]
+                        rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
+                        rgb_sub, mask_sub = self.model.shade_submesh(
+                            sub_name, rast, texc, wpos, inorm, vdir, camera, res, tang, btang)
+                        rendered_total = rendered_total + rgb_sub
+                        mask_total = torch.max(mask_total, mask_sub)
+                    rendered = rendered_total
+                    mask = mask_total
                 else:
                     rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
                     rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
@@ -273,7 +355,11 @@ class Trainer:
                 gt_linear = gt_resized.clamp(0, 1).pow(2.2)
 
                 # 计算损失（TV loss 需要纹理）
-                tex_for_loss = self.model.get_material_texture().to(self.device)
+                if self.is_multi:
+                    tex_dict = self.model.get_material_texture()
+                    tex_for_loss = torch.stack(list(tex_dict.values())).to(self.device)  # [N, 1, H, W, 8]
+                else:
+                    tex_for_loss = self.model.get_material_texture().to(self.device)
                 loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
                 # PBR: 环境贴图正则化（TV + L2 防止 HDR 值爆炸）
@@ -310,6 +396,19 @@ class Trainer:
                     _rendered, _mask, _ = self.renderer.render(
                         self.model.features_dc, self.model.features_rest, _cam,
                     )
+                elif self.is_multi:
+                    _res = self.current_resolution
+                    _rendered_total = torch.zeros(1, _res, _res, 3, device=self.device)
+                    _mask_total = torch.zeros(1, _res, _res, device=self.device)
+                    for _sub_name in self.submesh_names:
+                        _sub_renderer = self.renderers[_sub_name]
+                        _rast, _texc, _wpos, _inorm, _vdir, _tang, _btang = _sub_renderer.rasterize_and_interpolate(_cam)
+                        _rgb_sub, _mask_sub = self.model.shade_submesh(
+                            _sub_name, _rast, _texc, _wpos, _inorm, _vdir, _cam, _res, _tang, _btang)
+                        _rendered_total = _rendered_total + _rgb_sub
+                        _mask_total = torch.max(_mask_total, _mask_sub)
+                    _rendered = _rendered_total
+                    _mask = _mask_total
                 else:
                     _rast, _texc, _wpos, _inorm, _vdir, _tang, _btang = self.renderer.rasterize_and_interpolate(_cam)
                     _rendered, _mask = self.model.shade(_rast, _texc, _wpos, _inorm, _vdir, _cam, self.current_resolution, _tang, _btang)
@@ -381,6 +480,9 @@ class Trainer:
         self.logger.export_debug(
             self.model, self.renderer, self.dataset, output_dir, epoch,
             self.history, self.device, self.current_resolution,
+            is_multi=self.is_multi,
+            renderers=self.renderers if self.is_multi else None,
+            submesh_names=self.submesh_names if self.is_multi else None,
         )
 
     # ------------------------------------------------------------------
