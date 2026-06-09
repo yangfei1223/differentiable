@@ -43,6 +43,14 @@
 <img src="resource/helmet_pbr_env_map.png" width="45%"/>
 </p>
 
+环绕视频（Full / Diffuse / Specular）：
+
+<p align="center">
+<video src="resource/helmet_pbr_orbit.mp4" width="30%"/>
+<video src="resource/helmet_pbr_orbit_diffuse.mp4" width="30%"/>
+<video src="resource/helmet_pbr_orbit_specular.mp4" width="30%"/>
+</p>
+
 ### 实验分析
 
 **GT 材质初始化实验**：使用 DamagedHelmet 原始材质贴图（albedo / metallicRoughness / normal）+ 环境光 EXR 初始化 PBR 管线，训练 2000 epochs 后峰值 22.17 dB，相比 random init 的 21.97 dB 仅提升 +0.20 dB。说明材质初始化不是瓶颈，~22 dB 是 split-sum 着色模型在当前配置下的收敛上限。

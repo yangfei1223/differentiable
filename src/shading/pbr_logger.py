@@ -145,28 +145,36 @@ class PBRLogger(ShadingLogger):
     def render_component_video(self, model, mesh, output_dir, filename, mode, **vk):
         """渲染 diffuse/specular 单分量视频。
 
-        临时修改模型材质，渲染后恢复。
+        直接渲染完整 PBR 帧，从 debug_info 提取对应分量，不修改材质。
         """
+        from src.video import render_video
+
+        # 创建 wrapper 模型，shade 时提取指定分量
         import torch.nn as nn
 
-        # 保存原始材质
-        orig_mat = model.mat_texture.data.clone()
+        class ComponentModel:
+            """包装 PBRShadingModel，渲染指定分量（diffuse/specular）。"""
+            def __init__(self, base_model, component):
+                self.base = base_model
+                self.component = component  # "diffuse" or "specular"
+                self.mat_texture = base_model.mat_texture
+                self.env_map = base_model.env_map
 
-        # 构造覆盖材质: roughness=1(纯diffuse) 或 metallic=1(纯specular)
-        if mode == "diffuse":
-            # metallic=0, roughness=1 → 只有 diffuse
-            override = orig_mat.clone()
-            # sigmoid inverse of 1.0 ≈ large positive, sigmoid inverse of 0.0 ≈ -5.0
-            override[..., 3] = 10.0   # roughness → sigmoid → ~1.0
-            override[..., 4] = -5.0   # metallic → sigmoid → ~0.007
-        elif mode == "specular":
-            # metallic=1 → F0=base_color, kd=0
-            override = orig_mat.clone()
-            override[..., 4] = 10.0   # metallic → sigmoid → ~1.0
+            def shade(self, rast_out, texc, world_pos, normals, view_dirs, camera,
+                      resolution, tangents=None, bitangents=None):
+                rgb, mask = self.base.shade(
+                    rast_out, texc, world_pos, normals, view_dirs, camera,
+                    resolution, tangents, bitangents,
+                )
+                debug = self.base.get_debug_info()
+                component = debug.get(self.component, torch.zeros_like(rgb))
+                return component, mask
 
-        model.mat_texture = nn.Parameter(override)
-        try:
-            from src.video import render_video
-            render_video(mesh=mesh, shading_model=model, output_path=os.path.join(output_dir, filename), **vk)
-        finally:
-            model.mat_texture = nn.Parameter(orig_mat)
+        comp_model = ComponentModel(model, mode)
+        comp_model.mat_texture = model.mat_texture
+        comp_model.env_map = model.env_map
+
+        render_video(
+            mesh=mesh, shading_model=comp_model,
+            output_path=os.path.join(output_dir, filename), **vk,
+        )
