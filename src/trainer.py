@@ -357,7 +357,7 @@ class Trainer:
                 # 计算损失（TV loss 需要纹理）
                 if self.is_multi:
                     tex_dict = self.model.get_material_texture()
-                    tex_for_loss = torch.stack(list(tex_dict.values())).to(self.device)  # [N, 1, H, W, 8]
+                    tex_for_loss = torch.cat(list(tex_dict.values()), dim=0).to(self.device)  # [N, H, W, 8]
                 else:
                     tex_for_loss = self.model.get_material_texture().to(self.device)
                 loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)

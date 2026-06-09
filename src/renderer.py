@@ -46,35 +46,35 @@ class DifferentiableRenderer:
         self.resolution = resolution
         self.device = device
 
-        # 确保顶点形状为 [1, V, 3]
+        # 确保顶点形状为 [1, V, 3]，并保证 contiguous（nvdiffrast 要求）
         if vertices.dim() == 2:
             vertices = vertices.unsqueeze(0)
-        self.vertices = vertices.to(device).float()
+        self.vertices = vertices.to(device).float().contiguous()
 
         # faces: [F, 3] int32
-        self.faces = faces.to(device).int()
+        self.faces = faces.to(device).int().contiguous()
 
         # uvs: [Vt, 2]
-        self.uvs = uvs.to(device).float()
+        self.uvs = uvs.to(device).float().contiguous()
 
         # uv_idx: [F, 3] int32
-        self.uv_idx = uv_idx.to(device).int()
+        self.uv_idx = uv_idx.to(device).int().contiguous()
 
         if normals is not None:
-            self.normals = normals.to(device).float()
+            self.normals = normals.to(device).float().contiguous()
         else:
             self.normals = None
         if normal_idx is not None:
-            self.normal_idx = normal_idx.to(device).int()
+            self.normal_idx = normal_idx.to(device).int().contiguous()
         else:
             self.normal_idx = None
 
         if tangents is not None:
-            self.tangents = tangents.to(device).float()
+            self.tangents = tangents.to(device).float().contiguous()
         else:
             self.tangents = None
         if bitangents is not None:
-            self.bitangents = bitangents.to(device).float()
+            self.bitangents = bitangents.to(device).float().contiguous()
         else:
             self.bitangents = None
 
