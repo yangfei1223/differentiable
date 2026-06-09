@@ -1,0 +1,26 @@
+render_mode: pbr
+
+data:
+  mesh_path: data/piano_260604/scene/original_with_mats.glb
+  gt_dir: data/piano_260604/gt
+  camera_path: data/piano_260604/cameras.json
+
+texture:
+  base_resolution: 512
+  target_resolution: 2048
+
+training:
+  num_epochs: 10
+  lr: 0.01
+  batch_size: 4
+  lr_decay: 0.5
+  lr_decay_epochs: [3, 6, 8]
+  resolution_schedule:
+    - epoch: 0
+      resolution: 512
+
+pbr:
+  env_map_res: [256, 512]
+  brdf_lut_size: 256
+  env_tv_weight: 0.0005
+  env_l2_weight: 0.0001
