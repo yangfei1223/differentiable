@@ -324,21 +324,36 @@ class Trainer:
                         self.model.features_dc, self.model.features_rest, camera,
                     )
                 elif self.is_multi:
-                    # Multi-mesh PBR path: depth-based compositing
+                    # Multi-mesh PBR: collect all submeshes, depth-composite
                     res = self.current_resolution
-                    rendered = torch.zeros(1, res, res, 3, device=self.device)
-                    depth_buf = torch.full((1, res, res), float("inf"), device=self.device)
-                    mask = torch.zeros(1, res, res, device=self.device)
+                    n_subs = len(self.submesh_names)
+                    all_rgbs = []
+                    all_masks = []
+                    all_deps = []
                     for sub_name in self.submesh_names:
                         sub_renderer = self.renderers[sub_name]
                         rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
                         rgb_sub, mask_sub = self.model.shade_submesh(
                             sub_name, rast, texc, wpos, inorm, vdir, camera, res, tang, btang)
-                        sub_depth = rast[..., 2]  # NDC depth: smaller = closer
-                        write = (mask_sub > 0.5) & (sub_depth < depth_buf)
-                        rendered = torch.where(write.unsqueeze(-1), rgb_sub, rendered)
-                        depth_buf = torch.where(write, sub_depth, depth_buf)
-                        mask = torch.max(mask, mask_sub)
+                        all_rgbs.append(rgb_sub.unsqueeze(0))
+                        all_masks.append(mask_sub.unsqueeze(0))
+                        all_deps.append(rast[..., 2].unsqueeze(0))
+
+                    all_rgbs = torch.cat(all_rgbs, dim=0)   # [N, 1, H, W, 3]
+                    all_masks = torch.cat(all_masks, dim=0)  # [N, 1, H, W]
+                    all_deps = torch.cat(all_deps, dim=0)    # [N, 1, H, W]
+
+                    # Depth-based compositing (fast, no_grad autograd graph)
+                    with torch.no_grad():
+                        masked_deps = torch.where(
+                            all_masks > 0.5, all_deps,
+                            torch.full_like(all_deps, float("inf")))
+                        best_idx = masked_deps.argmin(dim=0)  # [1, H, W]
+                        mask = (masked_deps.min(dim=0)[0] < float("inf")).float()
+
+                    # Differentiable gather: select frontmost submesh (correct gradient flow)
+                    gather_idx = best_idx.unsqueeze(0).unsqueeze(-1).expand(1, 1, -1, -1, 3)
+                    rendered = torch.gather(all_rgbs, dim=0, index=gather_idx).squeeze(0)
                 else:
                     rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
                     rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)

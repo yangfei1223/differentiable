@@ -22,8 +22,10 @@ training:
   resolution_schedule:
     - epoch: 0
       resolution: 512
-    - epoch: 500
+    - epoch: 300
       resolution: 1024
+    - epoch: 700
+      resolution: 2048
 
 loss:
   lambda_l1: 1.0

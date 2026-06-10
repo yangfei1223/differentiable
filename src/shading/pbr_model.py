@@ -68,17 +68,11 @@ class PBRShadingModel(ShadingModel):
         """PBR split-sum 着色。"""
         import nvdiffrast.torch as dr
 
-        # 1. 采样材质贴图
+        # 1. 采样材质贴图 (单次 lookup: 8 通道 = 材质 + 法线)
         mat_raw = dr.texture(
             self.mat_texture, texc, filter_mode="linear", boundary_mode="clamp"
         )
-        base_color, roughness, metallic, _ = decode_material(mat_raw)
-
-        # 2. 采样法线贴图 → tangent → world 变换
-        tex_normal_raw = dr.texture(
-            self.mat_texture, texc, filter_mode="linear", boundary_mode="clamp"
-        )
-        _, _, _, tex_normal = decode_material(tex_normal_raw)
+        base_color, roughness, metallic, tex_normal = decode_material(mat_raw)
         # tex_normal: [1, H, W, 3] tangent-space 单位向量，(0,0,1)=无扰动
         if tangents is not None and bitangents is not None:
             world_normal = (
@@ -146,13 +140,9 @@ class PBRShadingModel(ShadingModel):
 
         tex = self.mat_textures[name]
 
-        # 1. Sample material
+        # 1. Sample material (single lookup: 8ch contains both material + normal)
         mat_raw = dr.texture(tex, texc, filter_mode="linear", boundary_mode="clamp")
-        base_color, roughness, metallic, _ = decode_material(mat_raw)
-
-        # 2. Normal mapping
-        tex_normal_raw = dr.texture(tex, texc, filter_mode="linear", boundary_mode="clamp")
-        _, _, _, tex_normal = decode_material(tex_normal_raw)
+        base_color, roughness, metallic, tex_normal = decode_material(mat_raw)
         if tangents is not None and bitangents is not None:
             world_normal = (
                 tangents * tex_normal[..., 0:1] +
