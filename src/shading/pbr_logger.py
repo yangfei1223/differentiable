@@ -63,7 +63,7 @@ class PBRLogger(ShadingLogger):
 
         if is_multi:
             from src.video import render_video_multi
-            render_video_multi(mesh=mesh, renderers=renderers, shading_model=model,
+            render_video_multi(mesh=mesh, shading_model=model,
                               submesh_names=submesh_names,
                               output_path=os.path.join(output_dir, "orbit.mp4"), **vk)
         else:

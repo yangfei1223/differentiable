@@ -251,9 +251,8 @@ def render_video(
 
 def render_video_multi(
     mesh,
-    renderers: dict,
-    shading_model,
     submesh_names: list[str],
+    shading_model,
     output_path: str,
     center=None,
     radius=None,
@@ -267,16 +266,13 @@ def render_video_multi(
 ) -> str:
     """Multi-mesh video: render all submeshes per frame, composite.
 
-    Same camera logic as render_video, but loops over submesh renderers
-    per frame and composites the results.
+    Creates per-submesh renderers at the video resolution from mesh data.
 
     Args:
-        mesh: MeshData or MultiMeshData — used for bbox camera auto-calculation.
-        renderers: Dict of submesh_name → DifferentiableRenderer.
-        shading_model: PBRShadingModel with shade_submesh().
+        mesh: MultiMeshData — used for geometry and bbox calculation.
         submesh_names: Ordered list of submesh names.
+        shading_model: PBRShadingModel with shade_submesh().
         output_path: Output mp4 path.
-        (remaining args same as render_video)
     """
     # ---- 1. 从 mesh bounding box 自动计算相机参数 ----
     # Get all vertices for bbox calculation
@@ -318,7 +314,17 @@ def render_video_multi(
         num_frames=num_frames, fov_deg=fov_deg, resolution=resolution,
     )
 
-    # ---- 3. 创建视频写入器 ----
+    # ---- 3. 创建 per-submesh 渲染器 ----
+    renderers = {}
+    for sub in mesh.submeshes:
+        v, f, uv, uvi, n, ni, t, bt = sub.to_torch()
+        renderers[sub.name] = DifferentiableRenderer(
+            vertices=v, faces=f, uvs=uv, uv_idx=uvi,
+            normals=n, normal_idx=ni, tangents=t, bitangents=bt,
+            resolution=resolution, device=device,
+        )
+
+    # ---- 4. 创建视频写入器 ----
     output_path = str(Path(output_path).resolve())
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
