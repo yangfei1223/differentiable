@@ -26,7 +26,8 @@ def init_material_texture(resolution: int) -> nn.Parameter:
         nn.Parameter [1, resolution, resolution, 8]
     """
     # ch 0-4: sigmoid inverse
-    init_vals = torch.tensor([0.0, 0.0, 0.0, 0.0, -5.0, 0.0, 0.0, 1.0])
+    # roughness 初始 ~0.12 (sigmoid(-2)), metallic 初始 ~0.007 (sigmoid(-5))
+    init_vals = torch.tensor([0.0, 0.0, 0.0, -2.0, -5.0, 0.0, 0.0, 1.0])
     data = init_vals.reshape(1, 1, 1, 8).expand(1, resolution, resolution, 8).clone()
 
     return nn.Parameter(data.float())
