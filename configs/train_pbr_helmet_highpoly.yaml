@@ -1,0 +1,45 @@
+render_mode: pbr
+
+data:
+  mesh_path: data/helmet_260604/scene/original_with_mats.glb
+  gt_dir: data/helmet_260604/gt
+  camera_path: data/helmet_260604/cameras.json
+
+texture:
+  sh_order: 2
+  base_resolution: 512
+  target_resolution: 2048
+
+training:
+  num_epochs: 2000
+  lr: 0.01
+  batch_size: 4
+  lr_decay: 0.5
+  lr_decay_epochs: [500, 1000, 1500]
+  resolution_schedule:
+    - epoch: 0
+      resolution: 512
+    - epoch: 300
+      resolution: 1024
+
+loss:
+  lambda_l1: 1.0
+  lambda_ssim: 0.2
+  lambda_tv: 0.005
+
+seam_padding:
+  dilation_radius: 3
+  apply_every_n_epochs: 50
+
+pbr:
+  env_map_res: [256, 512]
+  n_mip_levels: 5
+  brdf_lut_size: 256
+  env_lr_ratio: 1.0
+  env_tv_weight: 0.0005
+  env_l2_weight: 0.0001
+
+video:
+  num_frames: 120
+  resolution: 1024
+  fps: 30

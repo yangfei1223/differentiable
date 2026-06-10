@@ -268,24 +268,13 @@ def load_mesh(path: str | Path) -> MeshData | MultiMeshData:
 
     if path.suffix.lower() in (".glb", ".gltf"):
         subs = load_gltf(path)
-        if len(subs) == 1:
-            # Single mesh — use existing MeshData path
-            d = subs[0]
-            mesh_data = MeshData(
-                vertices=d["vertices"], faces=d["faces"],
-                uvs=d["uvs"], uv_idx=d["uv_idx"],
-                normals=d.get("normals"), normal_idx=d.get("normal_idx"),
-            )
-            if mesh_data.normals is None:
-                mesh_data.normals = mesh_data.compute_vertex_normals()
-            mesh_data.tangents, mesh_data.bitangents = mesh_data.compute_vertex_tangents()
-            return mesh_data
-        else:
-            # Multi mesh
+        if len(subs) > 1:
+            # Multi mesh — use new gltf_loader path
             submesh_list = [SubMeshData.from_dict(d) for d in subs]
             return MultiMeshData(submeshes=submesh_list)
+        # Single mesh: fall through to trimesh path for backward compat
 
-    # OBJ fallback (existing trimesh path)
+    # trimesh path (OBJ + single-mesh GLB)
     scene_or_mesh = trimesh.load(str(path), force="mesh", process=False)
 
     # trimesh.load 在某些情况下返回 Scene，统一取第一个 geometry
