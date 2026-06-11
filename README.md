@@ -18,37 +18,37 @@
 渲染对比 Atlas（左上：GT，右上：渲染，左下：Diffuse，右下：Specular）：
 
 <p align="center">
-<img src="resource/helmet_pbr_compare_0.png" width="45%"/>
-<img src="resource/helmet_pbr_compare_1.png" width="45%"/>
+<img src="resource/helmet_pbr/helmet_pbr_compare_0.png" width="45%"/>
+<img src="resource/helmet_pbr/helmet_pbr_compare_1.png" width="45%"/>
 </p>
 
 训练曲线（Loss / PSNR）：
 
 <p align="center">
-<img src="resource/helmet_pbr_curves.png" width="60%"/>
+<img src="resource/helmet_pbr/helmet_pbr_curves.png" width="60%"/>
 </p>
 
 分解材质贴图（base_color / roughness / metallic / normal）：
 
 <p align="center">
-<img src="resource/helmet_pbr_base_color.png" width="22%"/>
-<img src="resource/helmet_pbr_roughness.png" width="22%"/>
-<img src="resource/helmet_pbr_metallic.png" width="22%"/>
-<img src="resource/helmet_pbr_normal_map.png" width="22%"/>
+<img src="resource/helmet_pbr/helmet_pbr_base_color.png" width="22%"/>
+<img src="resource/helmet_pbr/helmet_pbr_roughness.png" width="22%"/>
+<img src="resource/helmet_pbr/helmet_pbr_metallic.png" width="22%"/>
+<img src="resource/helmet_pbr/helmet_pbr_normal_map.png" width="22%"/>
 </p>
 
 学习到的环境贴图：
 
 <p align="center">
-<img src="resource/helmet_pbr_env_map.png" width="45%"/>
+<img src="resource/helmet_pbr/helmet_pbr_env_map.png" width="45%"/>
 </p>
 
 环绕视频（Full / Diffuse / Specular）：
 
 <p align="center">
-<video src="resource/helmet_pbr_orbit.mp4" width="30%"/>
-<video src="resource/helmet_pbr_orbit_diffuse.mp4" width="30%"/>
-<video src="resource/helmet_pbr_orbit_specular.mp4" width="30%"/>
+<video src="resource/helmet_pbr/helmet_pbr_orbit.mp4" width="30%"/>
+<video src="resource/helmet_pbr/helmet_pbr_orbit_diffuse.mp4" width="30%"/>
+<video src="resource/helmet_pbr/helmet_pbr_orbit_specular.mp4" width="30%"/>
 </p>
 
 ### 实验分析
