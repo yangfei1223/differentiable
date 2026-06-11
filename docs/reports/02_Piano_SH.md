@@ -33,6 +33,14 @@
 <img src="../../resource/piano_sh/curves.png" width="60%"/>
 </p>
 
+## 优化纹理（Diffuse / DC）
+
+SH 模型学习到的 DC（diffuse）纹理：
+
+<p align="center">
+<img src="../../resource/piano_sh/diffuse.png" width="45%"/>
+</p>
+
 ## 环绕视频
 
 <p align="center">

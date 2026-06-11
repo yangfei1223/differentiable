@@ -33,6 +33,14 @@ DamagedHelmet 头盔场景，使用 2 阶球谐系数（SH）着色。
 <img src="../../resource/helmet_sh/curves.png" width="60%"/>
 </p>
 
+## 优化纹理（Diffuse / DC）
+
+SH 模型学习到的 DC（diffuse）纹理：
+
+<p align="center">
+<img src="../../resource/helmet_sh/diffuse.png" width="45%"/>
+</p>
+
 ## 环绕视频
 
 Full / DC-only / High-frequency 分量：
