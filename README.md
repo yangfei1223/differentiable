@@ -46,9 +46,9 @@
 环绕视频（Full / Diffuse / Specular）：
 
 <p align="center">
-<video src="resource/helmet_pbr/helmet_pbr_orbit.mp4" width="30%"/>
-<video src="resource/helmet_pbr/helmet_pbr_orbit_diffuse.mp4" width="30%"/>
-<video src="resource/helmet_pbr/helmet_pbr_orbit_specular.mp4" width="30%"/>
+[▶ helmet_pbr_orbit](resource/helmet_pbr/helmet_pbr_orbit.mp4)
+[▶ helmet_pbr_orbit_diffuse](resource/helmet_pbr/helmet_pbr_orbit_diffuse.mp4)
+[▶ helmet_pbr_orbit_specular](resource/helmet_pbr/helmet_pbr_orbit_specular.mp4)
 </p>
 
 ### 实验分析

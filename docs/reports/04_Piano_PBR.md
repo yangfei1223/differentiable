@@ -52,11 +52,7 @@
 
 ## 环绕视频
 
-<p align="center">
-<video src="../../resource/piano_pbr/orbit.mp4" width="30%"/>
-<video src="../../resource/piano_pbr/orbit_diffuse.mp4" width="30%"/>
-<video src="../../resource/piano_pbr/orbit_specular.mp4" width="30%"/>
-</p>
+<p align="center">[▶ orbit](../../resource/piano_pbr/orbit.mp4) &nbsp; [▶ orbit_diffuse](../../resource/piano_pbr/orbit_diffuse.mp4) &nbsp; [▶ orbit_specular](../../resource/piano_pbr/orbit_specular.mp4)</p>
 
 ## 训练过程
 

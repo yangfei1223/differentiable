@@ -45,11 +45,7 @@ SH 模型学习到的 DC（diffuse）纹理：
 
 Full / DC-only / High-frequency 分量：
 
-<p align="center">
-<video src="../../resource/helmet_sh/orbit.mp4" width="30%"/>
-<video src="../../resource/helmet_sh/orbit_dc.mp4" width="30%"/>
-<video src="../../resource/helmet_sh/orbit_hf.mp4" width="30%"/>
-</p>
+<p align="center">[▶ orbit](../../resource/helmet_sh/orbit.mp4) &nbsp; [▶ orbit_dc](../../resource/helmet_sh/orbit_dc.mp4) &nbsp; [▶ orbit_hf](../../resource/helmet_sh/orbit_hf.mp4)</p>
 
 ## 分析
 

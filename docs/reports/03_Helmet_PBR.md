@@ -59,11 +59,7 @@ DamagedHelmet 头盔场景，使用 PBR split-sum 着色。金属面罩 + 衬垫
 
 ## 环绕视频
 
-<p align="center">
-<video src="../../resource/helmet_pbr/orbit.mp4" width="30%"/>
-<video src="../../resource/helmet_pbr/orbit_diffuse.mp4" width="30%"/>
-<video src="../../resource/helmet_pbr/orbit_specular.mp4" width="30%"/>
-</p>
+<p align="center">[▶ orbit](../../resource/helmet_pbr/orbit.mp4) &nbsp; [▶ orbit_diffuse](../../resource/helmet_pbr/orbit_diffuse.mp4) &nbsp; [▶ orbit_specular](../../resource/helmet_pbr/orbit_specular.mp4)</p>
 
 ## 训练过程
 

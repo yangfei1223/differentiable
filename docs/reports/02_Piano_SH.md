@@ -43,11 +43,7 @@ SH 模型学习到的 DC（diffuse）纹理：
 
 ## 环绕视频
 
-<p align="center">
-<video src="../../resource/piano_sh/orbit.mp4" width="30%"/>
-<video src="../../resource/piano_sh/orbit_dc.mp4" width="30%"/>
-<video src="../../resource/piano_sh/orbit_hf.mp4" width="30%"/>
-</p>
+<p align="center">[▶ orbit](../../resource/piano_sh/orbit.mp4) &nbsp; [▶ orbit_dc](../../resource/piano_sh/orbit_dc.mp4) &nbsp; [▶ orbit_hf](../../resource/piano_sh/orbit_hf.mp4)</p>
 
 ## 分析
 

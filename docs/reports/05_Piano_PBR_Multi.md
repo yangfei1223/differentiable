@@ -76,7 +76,7 @@
 ## 环绕视频
 
 <p align="center">
-<video src="../../resource/piano_pbr_multi/orbit.mp4" width="50%"/>
+[▶ orbit](../../resource/piano_pbr_multi/orbit.mp4)
 </p>
 
 ## 训练过程
