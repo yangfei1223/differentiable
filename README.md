@@ -4,65 +4,20 @@
 
 ## 训练结果
 
-| 场景 | 着色模型 | PSNR | 纹理分辨率 | 备注 |
+| 场景 | 着色模型 | PSNR | 纹理分辨率 | 报告 |
 |------|---------|------|-----------|------|
-| 头盔 | SH (order 2) | 13.19 dB | 2048×2048 | |
-| 头盔 | PBR (split-sum) | **21.97 dB** | 2048×2048 | |
-| 钢琴 | SH (order 2) | 20.37 dB | 2048×2048 | |
-| 钢琴 | PBR (split-sum) | 21.41 dB | 2048×2048 | 效果未达预期，见分析 |
+| 头盔 | SH (order 2) | 13.19 dB | 2048×2048 | [Helmet SH](docs/reports/01_Helmet_SH.md) |
+| 头盔 | PBR (split-sum, frozen normal) | **20.81 dB** | 2048×2048 | [Helmet PBR](docs/reports/03_Helmet_PBR.md) |
+| 钢琴 | SH (order 2) | 20.37 dB | 2048×2048 | [Piano SH](docs/reports/02_Piano_SH.md) |
+| 钢琴 | PBR multi-mesh (frozen normal) | **28.80 dB** | 6×1024×1024 | [Piano PBR](docs/reports/04_Piano_PBR.md) |
 
-> 头盔含金属面罩，PBR split-sum 捕捉镜面反射提升 +8.8 dB；钢琴以漫反射为主，PBR 仅有 +1.0 dB 增益。
+> 头盔含金属面罩，PBR split-sum 捕捉镜面反射提升 +7.6 dB；钢琴多 mesh + 冻结法线消除"水渍"伪影，PSNR 从 21.95 → 28.80 dB（+6.85 dB）。
 
-### 可视化结果 — 头盔 PBR (2000 epochs)
+### 关键技术改进
 
-渲染对比 Atlas（左上：GT，右上：渲染，左下：Diffuse，右下：Specular）：
-
-<p align="center">
-<img src="resource/helmet_pbr/helmet_pbr_compare_0.png" width="45%"/>
-<img src="resource/helmet_pbr/helmet_pbr_compare_1.png" width="45%"/>
-</p>
-
-训练曲线（Loss / PSNR）：
-
-<p align="center">
-<img src="resource/helmet_pbr/helmet_pbr_curves.png" width="60%"/>
-</p>
-
-分解材质贴图（base_color / roughness / metallic / normal）：
-
-<p align="center">
-<img src="resource/helmet_pbr/helmet_pbr_base_color.png" width="22%"/>
-<img src="resource/helmet_pbr/helmet_pbr_roughness.png" width="22%"/>
-<img src="resource/helmet_pbr/helmet_pbr_metallic.png" width="22%"/>
-<img src="resource/helmet_pbr/helmet_pbr_normal_map.png" width="22%"/>
-</p>
-
-学习到的环境贴图：
-
-<p align="center">
-<img src="resource/helmet_pbr/helmet_pbr_env_map.png" width="45%"/>
-</p>
-
-环绕视频（Full / Diffuse / Specular）：
-
-<p align="center">
-[▶ helmet_pbr_orbit](resource/helmet_pbr/helmet_pbr_orbit.mp4)
-[▶ helmet_pbr_orbit_diffuse](resource/helmet_pbr/helmet_pbr_orbit_diffuse.mp4)
-[▶ helmet_pbr_orbit_specular](resource/helmet_pbr/helmet_pbr_orbit_specular.mp4)
-</p>
-
-### 实验分析
-
-**GT 材质初始化实验**：使用 DamagedHelmet 原始材质贴图（albedo / metallicRoughness / normal）+ 环境光 EXR 初始化 PBR 管线，训练 2000 epochs 后峰值 22.17 dB，相比 random init 的 21.97 dB 仅提升 +0.20 dB。说明材质初始化不是瓶颈，~22 dB 是 split-sum 着色模型在当前配置下的收敛上限。
-
-**局限分析**：split-sum 近似无全局光照（GI）、无阴影、无多次弹射，与 Blender Cycles path tracing 存在本质差距。AO/自发光等缺失效果会被优化吸收到 base_color 和 env_map 中。
-
-**钢琴 PBR 效果不佳的原因**：
-
-- **几何复杂度高**：钢琴原始模型 93875 顶点（6 个子模型），低模 70686 顶点，减面比例小但子模型间接缝和穿插导致渲染伪影
-- **多材质混合**：钢琴包含木质琴身（diffuse）、金属琴弦（specular）、黑白键（高对比）等多种材质，单张 8ch 材质贴图难以同时表达
-- **UV 空间竞争**：多个子模型共享一张纹理，UV 岛之间空间分配不均，细节区域（琴弦、琴键）分辨率不足
-- **场景尺度大**：钢琴场景包围盒远大于头盔，相机分布更稀疏，单位面积采样密度低
+- **法线贴图冻结**：从 GLB 提取或外部加载法线贴图，烘焙进 normal 通道后冻结，训练中不优化。消除法线优化噪声导致的"水渍"高光伪影
+- **逐 submesh 梯度累积**：多 mesh 场景逐 submesh 累积梯度，VRAM 从 14.8GB 降至 6.3GB
+- **NaN 梯度清理**：nvdiffrast 边界采样偶发 NaN，`nan_to_num` 清理 env_map 和纹理梯度
 
 ## 功能
 
@@ -82,9 +37,11 @@
 ### PBR Split-Sum (v0.3)
 - **Split-Sum 近似** — diffuse irradiance + prefiltered specular + BRDF LUT (Karis 2014)
 - **8ch PBR 材质贴图** — base_color (3) + roughness (1) + metallic (1) + normal_xyz (3)，sigmoid 约束
+- **法线贴图冻结** — GLB 内嵌提取或外部文件加载，烘焙后冻结不优化
 - **Tangent-Space 法线贴图** — Mikktspace 风格切线计算，TBN 变换到世界空间
 - **HDR 环境贴图** — Equirect 参数化，softplus 解码，nvdiffrast `dr.texture` 内置 mipmap
 - **GGX BRDF LUT** — 全 PyTorch 向量化 importance sampling，能量守恒 (A+B ≤ 1)
+- **多 mesh 支持** — 逐 submesh 梯度累积 + depth-based 合成
 - **联合优化** — 材质贴图 + 环境贴图同时优化，TV + L2 正则化防爆炸
 - **分量视频** — Diffuse / Specular 分离环绕视频
 - **可插拔着色模型** — `ShadingModel` 协议 + 工厂函数，SH/PBR 透明切换
@@ -100,7 +57,7 @@
 │   ├── renderer.py            # nvdiffrast 可微渲染器 (7 值输出含 TBN)
 │   ├── losses.py              # L1 + Masked SSIM + TV Loss
 │   ├── seam_padding.py        # UV 边界膨胀
-│   ├── trainer.py             # 训练主循环 + env TV/L2 正则化
+│   ├── trainer.py             # 训练主循环 + 梯度累积 + 法线冻结
 │   ├── video.py               # 环绕视频渲染
 │   ├── exporter.py            # 资产导出 (Diffuse / SH 通道 / glTF)
 │   ├── utils.py               # 可视化工具
@@ -129,7 +86,11 @@
 │   ├── train_helmet.yaml      # 头盔 SH 配置
 │   ├── train_pbr.yaml         # 头盔 PBR 配置
 │   ├── train_pbr_piano.yaml   # 钢琴 PBR 配置
+│   ├── train_pbr_piano_multi_no_normal.yaml  # 钢琴多 mesh 冻结法线
+│   ├── train_pbr_helmet_no_normal.yaml       # 头盔冻结法线
 │   └── quick_test.yaml        # 快速验证
+├── docs/reports/              # 实验报告
+├── resource/                  # 报告用图片/视频资源
 ├── tests/                     # 单元测试
 ├── data/                      # 训练数据 (gitignore)
 │   └── {scene}_{yymmdd}/
@@ -243,6 +204,12 @@ python main.py --config configs/default.yaml --mode train
 
 # PBR split-sum
 python main.py --config configs/train_pbr.yaml --mode train
+
+# PBR + 冻结法线（头盔，外部法线贴图）
+python main.py --config configs/train_pbr_helmet_no_normal.yaml --mode train --output output/helmet_no_normal
+
+# PBR + 多 mesh + 冻结法线（钢琴）
+python main.py --config configs/train_pbr_piano_multi_no_normal.yaml --mode train --output output/piano_no_normal
 
 # 断点续训
 python main.py --config configs/train_pbr.yaml --mode train --resume output/{dataset}/checkpoint.pt
