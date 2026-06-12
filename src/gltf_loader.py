@@ -1,12 +1,40 @@
 """glTF loader — pygltflib-based, extracts per-mesh geometry + material refs."""
 from __future__ import annotations
 
+import io
 import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from pygltflib import GLTF2
+
+
+def _extract_image(gltf, image_idx) -> np.ndarray | None:
+    """Extract an image from glTF as RGB numpy array [H, W, 3], float32 [0,1].
+
+    Returns None if extraction fails.
+    """
+    from PIL import Image as PILImage
+
+    img_info = gltf.images[image_idx]
+
+    # Try embedded bufferView
+    if img_info.bufferView is not None:
+        bv = gltf.bufferViews[img_info.bufferView]
+        bin_data = gltf.binary_blob() or b""
+        start = bv.byteOffset or 0
+        raw = bin_data[start:start + bv.byteLength]
+        pil = PILImage.open(io.BytesIO(raw))
+    elif img_info.uri is not None:
+        # External file reference
+        pil = PILImage.open(img_info.uri)
+    else:
+        return None
+
+    pil = pil.convert("RGB")
+    arr = np.array(pil, dtype=np.float32) / 255.0
+    return arr
 
 
 def load_gltf(path: str | Path) -> list[dict[str, Any]]:
@@ -121,11 +149,19 @@ def load_gltf(path: str | Path) -> list[dict[str, Any]]:
                     uvs = accessor_cache[prim.attributes.TEXCOORD_0].astype(np.float64)[:, :2]
                     uv_idx = np.array(faces, dtype=np.int64)
 
-                # Material name
+                # Material name + normal map
                 mat_name = None
+                normal_map_image = None
                 if prim.material is not None:
                     mat = gltf.materials[prim.material]
                     mat_name = mat.name or f"material_{prim.material}"
+                    if mat.normalTexture is not None:
+                        nt_idx = mat.normalTexture.index
+                        tex_info = gltf.textures[nt_idx]
+                        try:
+                            normal_map_image = _extract_image(gltf, tex_info.source)
+                        except Exception:
+                            normal_map_image = None
 
                 # Apply node transform to vertices
                 if not np.allclose(transform, np.eye(4)):
@@ -153,6 +189,7 @@ def load_gltf(path: str | Path) -> list[dict[str, Any]]:
                     "normals": normals,
                     "normal_idx": np.array(faces, dtype=np.int64),
                     "material_name": mat_name,
+                    "normal_map_image": normal_map_image,
                 })
 
         # Recurse children
@@ -190,9 +227,17 @@ def load_gltf(path: str | Path) -> list[dict[str, Any]]:
                     uv_idx = np.array(faces, dtype=np.int64)
 
                 mat_name = None
+                normal_map_image = None
                 if prim.material is not None:
                     mat = gltf.materials[prim.material]
                     mat_name = mat.name or f"material_{prim.material}"
+                    if mat.normalTexture is not None:
+                        nt_idx = mat.normalTexture.index
+                        tex_info = gltf.textures[nt_idx]
+                        try:
+                            normal_map_image = _extract_image(gltf, tex_info.source)
+                        except Exception:
+                            normal_map_image = None
 
                 sub_name = mesh.name or f"mesh_{mi}"
 
@@ -205,6 +250,7 @@ def load_gltf(path: str | Path) -> list[dict[str, Any]]:
                     "normals": normals,
                     "normal_idx": np.array(faces, dtype=np.int64),
                     "material_name": mat_name,
+                    "normal_map_image": normal_map_image,
                 })
 
     # UV V-axis fix: glTF V=0 at bottom → V=1 at top (nvdiffrast convention)

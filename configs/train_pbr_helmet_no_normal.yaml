@@ -1,12 +1,9 @@
-export:
-  output_dir: output
-
 render_mode: pbr
 
 data:
-  mesh_path: data/piano_260604/scene/original_with_mats.glb
-  gt_dir: data/piano_260604/gt
-  camera_path: data/piano_260604/cameras.json
+  mesh_path: data/helmet_260604/scene/original_with_mats.glb
+  gt_dir: data/helmet_260604/gt
+  camera_path: data/helmet_260604/cameras.json
 
 texture:
   sh_order: 2
@@ -43,6 +40,8 @@ pbr:
   env_lr_ratio: 1.0
   env_tv_weight: 0.0005
   env_l2_weight: 0.0001
+  disable_normal_map: true
+  normal_map_path: data/helmet_260604/scene/gt_textures/Default_normal.jpg
 
 video:
   num_frames: 120

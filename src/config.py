@@ -16,6 +16,8 @@ class PBRConfig:
     env_tv_weight: float = 0.0005
     env_l2_weight: float = 0.0001
     init_env_map: Optional[str] = None
+    disable_normal_map: bool = False
+    normal_map_path: Optional[str] = None  # 外部法线贴图路径（单 mesh 场景）
 
 
 @dataclass

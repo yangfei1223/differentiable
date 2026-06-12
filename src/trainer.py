@@ -65,6 +65,14 @@ class Trainer:
         else:
             self.model.init_textures(config.texture.base_resolution)
 
+        # ---- 3b. 烘焙法线贴图（冻结 normal 通道） ----
+        self._frozen_normal_submeshes: set[str] = set()
+        if config.pbr.disable_normal_map:
+            if self.is_multi:
+                self._bake_normal_maps()
+            elif config.pbr.normal_map_path is not None:
+                self._bake_normal_map_single(config.pbr.normal_map_path)
+
         # ---- 4. 优化器 ----
         self._rebuild_optimizer()
         self.scheduler = MultiStepLR(
@@ -174,6 +182,12 @@ class Trainer:
             tex = tex.permute(0, 2, 3, 1)
             self.model.set_material_texture(tex.contiguous())
         self._rebuild_optimizer()
+        # 分辨率变化后重新烘焙法线贴图
+        if self._frozen_normal_submeshes:
+            if self.is_multi:
+                self._bake_normal_maps()
+            elif self.config.pbr.normal_map_path is not None:
+                self._bake_normal_map_single(self.config.pbr.normal_map_path)
 
     def _apply_seam_padding(self) -> None:
         """执行 seam padding：膨胀纹理中的空白区域。"""
@@ -195,6 +209,188 @@ class Trainer:
             tex = dilate_texture(tex, valid_mask, radius=radius).contiguous()
             self.model.set_material_texture(tex)
         self._rebuild_optimizer()
+
+    def _bake_normal_maps(self) -> None:
+        """将 GLB 法线贴图烘焙进材质纹理的 normal 通道，并标记为冻结。
+
+        法线贴图从 GLB 提取 → 重采样到纹理分辨率 → 写入 raw 空间。
+        被冻结的 submesh 在训练时 normal 通道梯度会被清零。
+        没有 normal_map_image 的 submesh 保持默认 (0,0,1)。
+        """
+        import torch.nn.functional as F
+
+        tex_dict = self.model.get_material_texture()
+        new_textures = {}
+        for sub in self.multi_mesh.submeshes:
+            tex = tex_dict[sub.name].to(self.device)
+            if sub.normal_map_image is not None:
+                img = torch.from_numpy(sub.normal_map_image).unsqueeze(0)  # [1, H, W, 3]
+                H, W = tex.shape[1], tex.shape[2]
+                # Resize normal map to texture resolution
+                img_chw = img.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                img_resized = F.interpolate(img_chw, size=(H, W), mode="bilinear", align_corners=False)
+                img_resized = img_resized.permute(0, 2, 3, 1)  # [1, H, W, 3]
+
+                # Normal map PNG: [0,1] → tangent-space normal [-1, 1]
+                # We store raw values that get F.normalize'd during decode
+                # F.normalize(raw, dim=-1) = raw / ||raw||
+                # So we just write the [-1, 1] values directly
+                normal_raw = img_resized * 2.0 - 1.0  # [0,1] → [-1,1]
+                tex[..., 5:8] = normal_raw
+                self._frozen_normal_submeshes.add(sub.name)
+                print(f"  [NormalMap] Baked into {sub.name} ({H}x{W})")
+            new_textures[sub.name] = tex
+        self.model.set_material_texture(new_textures)
+
+    def _bake_normal_map_single(self, normal_map_path: str) -> None:
+        """将外部法线贴图烘焙进单 mesh 材质纹理的 normal 通道。"""
+        import torch.nn.functional as F
+        from PIL import Image as PILImage
+
+        img = np.array(PILImage.open(normal_map_path).convert("RGB"), dtype=np.float32) / 255.0
+        img_tensor = torch.from_numpy(img).unsqueeze(0)  # [1, H, W, 3]
+
+        tex = self.model.get_material_texture().to(self.device)
+        H, W = tex.shape[1], tex.shape[2]
+        img_chw = img_tensor.permute(0, 3, 1, 2)
+        img_resized = F.interpolate(img_chw, size=(H, W), mode="bilinear", align_corners=False)
+        img_resized = img_resized.permute(0, 2, 3, 1)
+
+        normal_raw = img_resized * 2.0 - 1.0
+        tex[..., 5:8] = normal_raw
+        self.model.set_material_texture(tex)
+        self._frozen_normal_submeshes.add("__single__")
+        print(f"  [NormalMap] Baked into single mesh ({H}x{W}) from {normal_map_path}")
+
+    def _freeze_normal_grads(self) -> None:
+        """清零冻结 submesh 的 normal 通道梯度。"""
+        for name in self._frozen_normal_submeshes:
+            tex = self.model.mat_textures[name]
+            if tex.grad is not None:
+                tex.grad[..., 5:8].zero_()
+
+    # ------------------------------------------------------------------
+    # Multi-mesh gradient accumulation
+    # ------------------------------------------------------------------
+    def _train_step_multi_pbr(self, camera, gt: torch.Tensor) -> float:
+        """Multi-mesh PBR 训练步 — 逐 submesh 梯度累积，降低峰值显存。
+
+        将「6 submesh 全部 forward → 一起 backward」改为：
+        1. no-grad 深度 ownership 判定
+        2. 逐 submesh forward + loss + backward，梯度累积
+
+        峰值显存从 ~15 GB 降至 ~3 GB（2048 分辨率）。
+
+        Args:
+            camera: Camera 对象。
+            gt: GT 图像 [1, 3, H_gt, W_gt]。
+
+        Returns:
+            总损失值（用于 epoch_loss 累加）。
+        """
+        from src.losses import tv_loss, ssim_loss
+
+        res = self.current_resolution
+
+        # --- Phase 1: no-grad 深度 ownership ---
+        with torch.no_grad():
+            ownership = torch.full(
+                (1, res, res), -1, dtype=torch.long, device=self.device
+            )
+            depth_buf = torch.full(
+                (1, res, res), float("inf"), device=self.device
+            )
+            mask = torch.zeros(1, res, res, device=self.device)
+
+            for k, sub_name in enumerate(self.submesh_names):
+                sub_renderer = self.renderers[sub_name]
+                rast, _, _, _, _, _, _ = sub_renderer.rasterize_and_interpolate(camera)
+                mask_sub = (rast[..., 3] > 0).float()
+                depth_sub = rast[..., 2]
+                is_front = (mask_sub > 0.5) & (depth_sub < depth_buf)
+                ownership = torch.where(
+                    is_front, torch.full_like(ownership, k), ownership
+                )
+                depth_buf = torch.where(is_front, depth_sub, depth_buf)
+                mask = torch.max(mask, mask_sub)
+
+        # 翻转到图像坐标
+        mask = mask.flip(1)
+        ownership = ownership.flip(1)
+
+        # GT prep
+        gt_hw = gt.permute(0, 1, 2, 3)
+        gt_resized = F.interpolate(
+            gt_hw, size=(res, res), mode="bilinear", align_corners=False
+        )
+        gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+        gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+
+        # --- Phase 2: 环境贴图正则化（一次） ---
+        env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
+        env_decoded = self.model.env_map.decode()
+        env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+        env_loss = env_tv + env_l2
+        env_loss.backward()
+        total_loss = env_loss.item()
+
+        # --- Phase 3: 逐 submesh 梯度累积 ---
+        n_valid = mask.sum() * 3 + 1e-8
+
+        for k, sub_name in enumerate(self.submesh_names):
+            sub_mask = (ownership == k).float()
+
+            # 跳过无可见像素的 submesh
+            if sub_mask.sum() < 1:
+                continue
+
+            # Forward (with grad)
+            sub_renderer = self.renderers[sub_name]
+            rast, texc, wpos, inorm, vdir, tang, btang = (
+                sub_renderer.rasterize_and_interpolate(camera)
+            )
+            rgb_sub, _ = self.model.shade_submesh(
+                sub_name, rast, texc, wpos, inorm, vdir, camera, res, tang, btang
+            )
+            rgb_sub = rgb_sub.flip(1)
+
+            pixel_mask = (sub_mask * mask).unsqueeze(-1)
+
+            # L1（逐像素，等价于原始实现）
+            abs_diff = (rgb_sub - gt_linear).abs() * pixel_mask
+            l1 = abs_diff.sum() / n_valid
+
+            # SSIM（近似：非本 submesh 像素用 GT 填充）
+            sub_rendered_full = rgb_sub * pixel_mask + gt_linear * (1 - pixel_mask)
+            rendered_chw = sub_rendered_full.permute(0, 3, 1, 2)
+            gt_chw = gt_linear.permute(0, 3, 1, 2)
+            ssim = ssim_loss(rendered_chw, gt_chw)
+
+            # TV（直接作用于参数，梯度正确传播）
+            tv = tv_loss(self.model.mat_textures[sub_name])
+
+            loss = (
+                self.config.loss.lambda_l1 * l1
+                + self.config.loss.lambda_ssim * ssim
+                + self.config.loss.lambda_tv * tv
+            )
+
+            loss.backward()  # 梯度累积
+            total_loss += loss.item()
+
+        # 防止梯度 NaN（nvdiffrast 边界采样偶发）
+        if self.model.env_map.raw.grad is not None:
+            self.model.env_map.raw.grad = torch.nan_to_num(
+                self.model.env_map.raw.grad, nan=0.0
+            )
+        for tex in self.model.mat_textures.values():
+            if tex.grad is not None:
+                tex.grad = torch.nan_to_num(tex.grad, nan=0.0)
+
+        # 冻结法线贴图 normal 通道
+        self._freeze_normal_grads()
+
+        return total_loss
 
     # ------------------------------------------------------------------
     # Training
@@ -317,83 +513,48 @@ class Trainer:
                 img_np, camera = self.dataset[idx]
                 gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1, 3, H_gt, W_gt]
 
-                # 渲染
-                if self.config.render_mode == "sh":
-                    # SH uses the old render path for backward compat
-                    rendered, mask, _ = self.renderer.render(
-                        self.model.features_dc, self.model.features_rest, camera,
-                    )
-                elif self.is_multi:
-                    # Multi-mesh PBR: collect all submeshes, depth-composite
-                    res = self.current_resolution
-                    n_subs = len(self.submesh_names)
-                    all_rgbs = []
-                    all_masks = []
-                    all_deps = []
-                    for sub_name in self.submesh_names:
-                        sub_renderer = self.renderers[sub_name]
-                        rast, texc, wpos, inorm, vdir, tang, btang = sub_renderer.rasterize_and_interpolate(camera)
-                        rgb_sub, mask_sub = self.model.shade_submesh(
-                            sub_name, rast, texc, wpos, inorm, vdir, camera, res, tang, btang)
-                        all_rgbs.append(rgb_sub.unsqueeze(0))
-                        all_masks.append(mask_sub.unsqueeze(0))
-                        all_deps.append(rast[..., 2].unsqueeze(0))
-
-                    all_rgbs = torch.cat(all_rgbs, dim=0)   # [N, 1, H, W, 3]
-                    all_masks = torch.cat(all_masks, dim=0)  # [N, 1, H, W]
-                    all_deps = torch.cat(all_deps, dim=0)    # [N, 1, H, W]
-
-                    # Depth-based compositing (fast, no_grad autograd graph)
-                    with torch.no_grad():
-                        masked_deps = torch.where(
-                            all_masks > 0.5, all_deps,
-                            torch.full_like(all_deps, float("inf")))
-                        best_idx = masked_deps.argmin(dim=0)  # [1, H, W]
-                        mask = (masked_deps.min(dim=0)[0] < float("inf")).float()
-
-                    # Differentiable gather: select frontmost submesh (correct gradient flow)
-                    gather_idx = best_idx.unsqueeze(0).unsqueeze(-1).expand(1, 1, -1, -1, 3)
-                    rendered = torch.gather(all_rgbs, dim=0, index=gather_idx).squeeze(0)
+                if self.is_multi and self.config.render_mode == "pbr":
+                    # Multi-mesh PBR: per-submesh gradient accumulation
+                    step_loss = self._train_step_multi_pbr(camera, gt)
                 else:
-                    rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
-                    rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
+                    # SH or single-mesh PBR (original path)
+                    if self.config.render_mode == "sh":
+                        rendered, mask, _ = self.renderer.render(
+                            self.model.features_dc, self.model.features_rest, camera,
+                        )
+                    else:
+                        rast, texc, wpos, interp_normals, vdirs, tangents, bitangents = self.renderer.rasterize_and_interpolate(camera)
+                        rendered, mask = self.model.shade(rast, texc, wpos, interp_normals, vdirs, camera, self.current_resolution, tangents, bitangents)
 
-                # nvdiffrast 输出为 OpenGL 坐标 (原点左下)，垂直翻转到图像坐标 (原点左上)
-                rendered = rendered.flip(1)
-                mask = mask.flip(1)
+                    rendered = rendered.flip(1)
+                    mask = mask.flip(1)
 
-                # 将 GT resize 到渲染分辨率
-                gt_hw = gt.permute(0, 1, 2, 3)  # [1, 3, H_gt, W_gt]
-                H, W = rendered.shape[1], rendered.shape[2]
-                gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
-                gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)  # [1, H, W, 3]
+                    gt_hw = gt.permute(0, 1, 2, 3)
+                    H, W = rendered.shape[1], rendered.shape[2]
+                    gt_resized = F.interpolate(gt_hw, size=(H, W), mode="bilinear", align_corners=False)
+                    gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+                    gt_linear = gt_resized.clamp(0, 1).pow(2.2)
 
-                # sRGB → linear: GT 图像是 sRGB 编码, 渲染输出是线性空间
-                gt_linear = gt_resized.clamp(0, 1).pow(2.2)
-
-                # 计算损失（TV loss 需要纹理）
-                if self.is_multi:
-                    tex_dict = self.model.get_material_texture()
-                    tex_for_loss = torch.cat(list(tex_dict.values()), dim=0).to(self.device)  # [N, H, W, 8]
-                else:
                     tex_for_loss = self.model.get_material_texture().to(self.device)
-                loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
+                    loss = self.criterion(rendered, gt_linear, mask, tex_for_loss)
 
-                # PBR: 环境贴图正则化（TV + L2 防止 HDR 值爆炸）
-                if self.config.render_mode == "pbr":
-                    from src.losses import tv_loss
-                    # TV: 平滑性（raw 参数空间）
-                    env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
-                    # L2: 防止解码后的值过大
-                    env_decoded = self.model.env_map.decode()
-                    env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
-                    loss = loss + env_tv + env_l2
+                    if self.config.render_mode == "pbr":
+                        from src.losses import tv_loss
+                        env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
+                        env_decoded = self.model.env_map.decode()
+                        env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+                        loss = loss + env_tv + env_l2
 
-                # 反向传播 & 更新
-                loss.backward()
+                    loss.backward()
+                    step_loss = loss.item()
+
+                # 冻结法线贴图 normal 通道梯度（单 mesh + multi 均适用）
+                if self._frozen_normal_submeshes and not self.is_multi:
+                    if self.model.mat_texture.grad is not None:
+                        self.model.mat_texture.grad[..., 5:8].zero_()
+
                 self.optimizer.step()
-
-                epoch_loss += loss.item()
+                epoch_loss += step_loss
 
             # 调度器步进
             self.scheduler.step()

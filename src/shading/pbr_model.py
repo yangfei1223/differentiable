@@ -74,7 +74,7 @@ class PBRShadingModel(ShadingModel):
         )
         base_color, roughness, metallic, tex_normal = decode_material(mat_raw)
         # tex_normal: [1, H, W, 3] tangent-space 单位向量，(0,0,1)=无扰动
-        if tangents is not None and bitangents is not None:
+        if not self.config.pbr.disable_normal_map and tangents is not None and bitangents is not None:
             world_normal = (
                 tangents * tex_normal[..., 0:1] +
                 bitangents * tex_normal[..., 1:2] +
@@ -143,7 +143,7 @@ class PBRShadingModel(ShadingModel):
         # 1. Sample material (single lookup: 8ch contains both material + normal)
         mat_raw = dr.texture(tex, texc, filter_mode="linear", boundary_mode="clamp")
         base_color, roughness, metallic, tex_normal = decode_material(mat_raw)
-        if tangents is not None and bitangents is not None:
+        if not self.config.pbr.disable_normal_map and tangents is not None and bitangents is not None:
             world_normal = (
                 tangents * tex_normal[..., 0:1] +
                 bitangents * tex_normal[..., 1:2] +

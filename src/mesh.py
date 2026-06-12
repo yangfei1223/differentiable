@@ -183,6 +183,7 @@ class SubMeshData:
     tangents: np.ndarray = None
     bitangents: np.ndarray = None
     material_name: str | None = None
+    normal_map_image: np.ndarray | None = None  # [H, W, 3] float32 [0,1] from GLB
 
     @property
     def num_vertices(self) -> int:
@@ -204,6 +205,7 @@ class SubMeshData:
             normals=d.get("normals"),
             normal_idx=d.get("normal_idx"),
             material_name=d.get("material_name"),
+            normal_map_image=d.get("normal_map_image"),
         )
         # Compute normals if missing
         if sub.normals is None:
