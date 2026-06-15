@@ -80,3 +80,38 @@ def test_init_feature_map_std():
     fm = init_feature_map(resolution=512, feature_dim=12, init_std=0.1)
     # randn * 0.1 → std ≈ 0.1
     assert 0.08 < fm.std().item() < 0.12
+
+
+def test_nlm_config_defaults():
+    """NeuralLightmapConfig has correct defaults."""
+    from src.config import NeuralLightmapConfig
+
+    cfg = NeuralLightmapConfig()
+    assert cfg.feature_dim == 12
+    assert cfg.pe_level == 2
+    assert cfg.mlp_hidden_dim == 32
+    assert cfg.feature_lr == 0.1
+    assert cfg.mlp_lr == 0.001
+    assert cfg.feature_tv_weight == 0.00001
+    assert cfg.feature_init_std == 0.1
+
+
+def test_config_load_nlm_yaml(tmp_path):
+    """YAML with 'nlm' section parses correctly."""
+    from src.config import load_config
+
+    yaml_content = """
+render_mode: nlm
+nlm:
+  feature_dim: 16
+  pe_level: 3
+  feature_lr: 0.05
+"""
+    p = tmp_path / "cfg.yaml"
+    p.write_text(yaml_content, encoding="utf-8")
+
+    cfg = load_config(str(p))
+    assert cfg.render_mode == "nlm"
+    assert cfg.nlm.feature_dim == 16
+    assert cfg.nlm.pe_level == 3
+    assert cfg.nlm.feature_lr == 0.05

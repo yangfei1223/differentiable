@@ -21,6 +21,17 @@ class PBRConfig:
 
 
 @dataclass
+class NeuralLightmapConfig:
+    feature_dim: int = 12              # 特征维度 C
+    pe_level: int = 2                  # 视角 PE 阶数 L（→ 15D）
+    mlp_hidden_dim: int = 32           # MLP 隐藏层宽度
+    feature_lr: float = 0.1            # 特征纹理学习率（TTUR 大值）
+    mlp_lr: float = 0.001              # MLP 学习率（TTUR 小值）
+    feature_tv_weight: float = 0.00001 # 特征图 TV 正则
+    feature_init_std: float = 0.1      # 初始化标准差
+
+
+@dataclass
 class DataConfig:
     mesh_path: str = "data/scene/lowpoly.obj"
     gt_dir: str = "data/gt"
@@ -100,6 +111,7 @@ class VideoConfig:
 class Config:
     render_mode: str = "sh"  # "sh" | "pbr"
     pbr: PBRConfig = field(default_factory=PBRConfig)
+    nlm: NeuralLightmapConfig = field(default_factory=NeuralLightmapConfig)
     data: DataConfig = field(default_factory=DataConfig)
     texture: TextureConfig = field(default_factory=TextureConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -123,6 +135,8 @@ def load_config(path: str | Path) -> Config:
         cfg.render_mode = raw["render_mode"]
     if "pbr" in raw:
         cfg.pbr = PBRConfig(**raw["pbr"])
+    if "nlm" in raw:
+        cfg.nlm = NeuralLightmapConfig(**raw["nlm"])
     if "data" in raw:
         cfg.data = DataConfig(**raw["data"])
     if "texture" in raw:
