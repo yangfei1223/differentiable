@@ -62,3 +62,21 @@ def test_tiny_mlp_param_count():
     mlp = TinyMLP(in_dim=27, hidden_dim=32, out_dim=3)
     n = sum(p.numel() for p in mlp.parameters())
     assert 1500 < n < 3500, f"Expected ~2K params, got {n}"
+
+
+def test_init_feature_map_shape():
+    """init_feature_map returns [1, res, res, C] tensor."""
+    from src.shading.nlm.feature_map import init_feature_map
+
+    fm = init_feature_map(resolution=64, feature_dim=12, init_std=0.1)
+    assert fm.shape == (1, 64, 64, 12)
+    assert fm.dtype == torch.float32
+
+
+def test_init_feature_map_std():
+    """Init std approximately matches configured value."""
+    from src.shading.nlm.feature_map import init_feature_map
+
+    fm = init_feature_map(resolution=512, feature_dim=12, init_std=0.1)
+    # randn * 0.1 → std ≈ 0.1
+    assert 0.08 < fm.std().item() < 0.12
