@@ -238,6 +238,19 @@ class SubMeshData:
         bt = torch.from_numpy(self.bitangents.astype(np.float32)) if self.bitangents is not None else torch.zeros_like(v)
         return v, f, uv, uvi, n, ni, t, bt
 
+    def to_mesh_data(self) -> MeshData:
+        """转换为 MeshData（用于 SH 等需要单 mesh 接口的场景）。"""
+        return MeshData(
+            vertices=self.vertices,
+            faces=self.faces,
+            uvs=self.uvs,
+            uv_idx=self.uv_idx,
+            normals=self.normals,
+            normal_idx=self.normal_idx,
+            tangents=self.tangents,
+            bitangents=self.bitangents,
+        )
+
 
 @dataclass
 class MultiMeshData:
@@ -270,11 +283,12 @@ def load_mesh(path: str | Path) -> MeshData | MultiMeshData:
 
     if path.suffix.lower() in (".glb", ".gltf"):
         subs = load_gltf(path)
-        if len(subs) > 1:
-            # Multi mesh — use new gltf_loader path
-            submesh_list = [SubMeshData.from_dict(d) for d in subs]
-            return MultiMeshData(submeshes=submesh_list)
-        # Single mesh: fall through to trimesh path for backward compat
+        if len(subs) < 1:
+            raise ValueError(f"GLB 文件 {path} 未找到任何 mesh")
+        # 所有 GLB/GLTF 统一走 gltf_loader 路径
+        # 单 mesh 也包装为 MultiMeshData（1 submesh）
+        submesh_list = [SubMeshData.from_dict(d) for d in subs]
+        return MultiMeshData(submeshes=submesh_list)
 
     # trimesh path (OBJ + single-mesh GLB)
     scene_or_mesh = trimesh.load(str(path), force="mesh", process=False)

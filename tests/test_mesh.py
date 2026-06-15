@@ -249,8 +249,9 @@ class TestMultiMeshData:
             assert sub.tangents is not None
 
     def test_single_mesh_still_works(self):
-        """Loading single-mesh helmet should still return MeshData."""
-        from src.mesh import load_mesh, MeshData
+        """Loading single-mesh helmet should return MultiMeshData with 1 submesh."""
+        from src.mesh import load_mesh, MultiMeshData
         mesh = load_mesh("data/helmet_260604/scene/lowpoly.glb")
-        assert isinstance(mesh, MeshData)
-        assert mesh.vertices.shape[1] == 3
+        assert isinstance(mesh, MultiMeshData)
+        assert mesh.num_submeshes == 1
+        assert mesh.submeshes[0].vertices.shape[1] == 3

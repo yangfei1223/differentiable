@@ -37,16 +37,25 @@ class Trainer:
         # ---- 1. 加载网格 ----
         mesh = load_mesh(config.data.mesh_path)
 
-        self.is_multi = isinstance(mesh, MultiMeshData)
         self.renderers: dict[str, DifferentiableRenderer] = {}
         self.submesh_names: list[str] = []
 
-        if self.is_multi:
-            self.multi_mesh = mesh
-            self.submesh_names = [s.name for s in mesh.submeshes]
-            self._submesh_lookup = {s.name: s for s in mesh.submeshes}
+        if isinstance(mesh, MultiMeshData):
+            if config.render_mode == "sh":
+                # SH 使用单 mesh 接口（renderer.render），从第一个 submesh 提取
+                single = mesh.submeshes[0].to_mesh_data()
+                self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = single.to_torch()
+                self.is_multi = False
+            else:
+                # PBR / NLM 走 multi 路径
+                self.multi_mesh = mesh
+                self.is_multi = True
+                self.submesh_names = [s.name for s in mesh.submeshes]
+                self._submesh_lookup = {s.name: s for s in mesh.submeshes}
         else:
+            # OBJ 文件 → MeshData（trimesh 路径）
             self.vertices, self.faces, self.uvs, self.uv_idx, self.normals, self.normal_idx, self.tangents, self.bitangents = mesh.to_torch()
+            self.is_multi = False
 
         # ---- 2. 创建数据集 ----
         self.dataset = GTDataset(
