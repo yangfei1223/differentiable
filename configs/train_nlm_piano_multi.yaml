@@ -1,0 +1,43 @@
+render_mode: nlm
+
+data:
+  mesh_path: data/piano_260604/scene/original_with_mats.glb
+  gt_dir: data/piano_260604/gt
+  camera_path: data/piano_260604/cameras.json
+
+texture:
+  base_resolution: 512
+  target_resolution: 1024
+
+nlm:
+  feature_dim: 12
+  pe_level: 2
+  mlp_hidden_dim: 32
+  feature_lr: 0.1
+  mlp_lr: 0.001
+  feature_tv_weight: 0.00001
+  feature_init_std: 0.1
+
+training:
+  num_epochs: 2000
+  batch_size: 4
+  lr: 0.01
+  lr_decay: 0.5
+  lr_decay_epochs: [500, 1000, 1500]
+  resolution_schedule:
+    - {epoch: 0, resolution: 512}
+    - {epoch: 300, resolution: 1024}
+
+loss:
+  lambda_l1: 1.0
+  lambda_ssim: 0.2
+  lambda_tv: 0.005
+
+seam_padding:
+  dilation_radius: 3
+  apply_every_n_epochs: 50
+
+video:
+  num_frames: 120
+  resolution: 1024
+  fps: 30

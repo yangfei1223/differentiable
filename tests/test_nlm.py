@@ -334,3 +334,30 @@ def test_create_logger_nlm():
     cfg.render_mode = "nlm"
     logger = create_logger("nlm", cfg)
     assert isinstance(logger, NLMLogger)
+
+
+# =========================================================================
+# Task 14: Texture resize roundtrip
+# =========================================================================
+
+
+def test_nlm_get_set_material_texture_resize():
+    """NLM texture get/set roundtrip preserves shape after resize."""
+    model = _make_nlm_model(resolution=32, submesh_names=["A"])
+
+    # Get textures
+    tex_dict = model.get_material_texture()
+    assert "A" in tex_dict
+    assert tex_dict["A"].shape == (1, 32, 32, 12)
+
+    # Resize via interpolate
+    import torch.nn.functional as F
+    resized = {}
+    for name, tex in tex_dict.items():
+        t = tex.permute(0, 3, 1, 2)
+        t = F.interpolate(t, size=(64, 64), mode="bilinear", align_corners=False)
+        t = t.permute(0, 2, 3, 1)
+        resized[name] = t.contiguous()
+
+    model.set_material_texture(resized)
+    assert model.feature_maps["A"].shape == (1, 64, 64, 12)
