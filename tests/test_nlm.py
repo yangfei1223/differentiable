@@ -322,3 +322,15 @@ def test_create_shading_model_nlm():
     cfg.render_mode = "nlm"
     model = create_shading_model("nlm", cfg)
     assert isinstance(model, NeuralLightmapShadingModel)
+
+
+def test_create_logger_nlm():
+    """Logger factory returns NLMLogger for render_mode='nlm'."""
+    from src.config import Config
+    from src.shading.logger import create_logger
+    from src.shading.nlm_logger import NLMLogger
+
+    cfg = Config()
+    cfg.render_mode = "nlm"
+    logger = create_logger("nlm", cfg)
+    assert isinstance(logger, NLMLogger)

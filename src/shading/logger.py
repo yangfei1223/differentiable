@@ -50,5 +50,8 @@ def create_logger(render_mode: str, config: Config) -> ShadingLogger:
     elif render_mode == "pbr":
         from src.shading.pbr_logger import PBRLogger
         return PBRLogger(config)
+    elif render_mode == "nlm":
+        from src.shading.nlm_logger import NLMLogger
+        return NLMLogger(config)
     else:
         raise ValueError(f"Unknown render_mode: {render_mode!r}")
