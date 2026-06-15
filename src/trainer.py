@@ -148,14 +148,25 @@ class Trainer:
     def _rebuild_optimizer(self) -> None:
         """根据 model.parameters() 重建优化器，保持特殊 lr 比例。"""
         base_lr = self.config.training.lr
-        param_groups = []
-        for i, p in enumerate(self.model.parameters()):
-            if self.config.render_mode == "sh" and i == 1:
-                param_groups.append({"params": [p], "lr": base_lr * self.config.training.rest_lr_ratio})
-            elif self.config.render_mode == "pbr" and i == 1:
-                param_groups.append({"params": [p], "lr": base_lr * self.config.pbr.env_lr_ratio})
-            else:
-                param_groups.append({"params": [p], "lr": base_lr})
+
+        if self.config.render_mode == "nlm":
+            # TTUR: feature maps (high lr) + MLP (low lr)
+            feat_params = list(self.model.feature_maps.values())
+            mlp_params = list(self.model.mlp.parameters())
+            param_groups = [
+                {"params": feat_params, "lr": self.config.nlm.feature_lr},
+                {"params": mlp_params, "lr": self.config.nlm.mlp_lr},
+            ]
+        else:
+            param_groups = []
+            for i, p in enumerate(self.model.parameters()):
+                if self.config.render_mode == "sh" and i == 1:
+                    param_groups.append({"params": [p], "lr": base_lr * self.config.training.rest_lr_ratio})
+                elif self.config.render_mode == "pbr" and i == 1:
+                    param_groups.append({"params": [p], "lr": base_lr * self.config.pbr.env_lr_ratio})
+                else:
+                    param_groups.append({"params": [p], "lr": base_lr})
+
         self.optimizer = Adam(param_groups)
 
     def _resize_textures(self, new_res: int) -> None:
