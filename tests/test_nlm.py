@@ -174,3 +174,69 @@ def test_pbr_post_backward_hook_noop():
     model = PBRShadingModel(cfg)
     # Should not raise
     model.post_backward_hook()
+
+
+# =========================================================================
+# NeuralLightmapShadingModel (Task 7)
+# =========================================================================
+
+
+def _make_nlm_model(feature_dim=12, pe_level=2, resolution=32, submesh_names=None):
+    """Helper: create an initialized NLM model on CPU."""
+    from src.config import Config
+    from src.shading.nlm_model import NeuralLightmapShadingModel
+
+    cfg = Config()
+    cfg.render_mode = "nlm"
+    cfg.nlm.feature_dim = feature_dim
+    cfg.nlm.pe_level = pe_level
+    model = NeuralLightmapShadingModel(cfg)
+    if submesh_names is None:
+        submesh_names = ["__default__"]
+    model.init_textures(resolution, submesh_names=submesh_names)
+    return model
+
+
+def test_nlm_parameters_has_feature_and_mlp():
+    """parameters() returns feature params first, then MLP params."""
+    model = _make_nlm_model(resolution=16, submesh_names=["A", "B"])
+    params = model.parameters()
+    # 2 feature maps + N MLP params (TinyMLP has 6 weight/bias tensors)
+    assert len(params) == 2 + 6
+
+
+def test_nlm_state_dict_roundtrip():
+    """state_dict → load_state_dict preserves parameters."""
+    model = _make_nlm_model(resolution=16)
+    state = model.state_dict()
+    assert state["render_mode"] == "nlm"
+    assert "feature_maps" in state
+    assert "mlp_state" in state
+
+    # Create new model and load
+    model2 = _make_nlm_model(resolution=16)
+    model2.load_state_dict(state)
+    # Compare a feature map
+    fm1 = model.feature_maps["__default__"]
+    fm2 = model2.feature_maps["__default__"]
+    assert torch.allclose(fm1, fm2)
+
+
+def test_nlm_regularization_returns_zero():
+    """NLM has no global regularization."""
+    model = _make_nlm_model(resolution=8)
+    reg = model.regularization_loss()
+    assert reg.item() == 0.0
+
+
+def test_nlm_get_submesh_texture():
+    """get_submesh_texture returns the feature map."""
+    model = _make_nlm_model(resolution=8, submesh_names=["Obj0"])
+    tex = model.get_submesh_texture("Obj0")
+    assert tex is model.feature_maps["Obj0"]
+
+
+def test_nlm_post_backward_hook_noop():
+    """NLM post_backward_hook is a no-op."""
+    model = _make_nlm_model(resolution=8)
+    assert model.post_backward_hook() is None
