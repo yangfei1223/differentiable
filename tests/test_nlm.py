@@ -240,3 +240,68 @@ def test_nlm_post_backward_hook_noop():
     """NLM post_backward_hook is a no-op."""
     model = _make_nlm_model(resolution=8)
     assert model.post_backward_hook() is None
+
+
+# =========================================================================
+# Task 8: Gradient Connectivity
+# =========================================================================
+
+
+def test_nlm_gradient_connectivity():
+    """Verify gradient flows to BOTH feature map and MLP after backward().
+
+    This is the core 'closed loop' verification: rasterize → sample → MLP
+    → loss → backward must update both feature map and MLP weights.
+    """
+    torch.manual_seed(42)
+    model = _make_nlm_model(feature_dim=12, pe_level=2, resolution=16)
+
+    # Fake rasterization outputs
+    rast_out = torch.zeros(1, 16, 16, 4, device=model.device)
+    rast_out[..., 3] = 1.0  # all pixels valid
+    rast_out[..., 2] = 0.5  # depth
+
+    # Fake UV coords in [0,1]
+    texc = torch.rand(1, 16, 16, 2, device=model.device)
+
+    # Fake view directions (normalized)
+    view_dirs = torch.randn(1, 16, 16, 3, device=model.device)
+    view_dirs = view_dirs / view_dirs.norm(dim=-1, keepdim=True)
+
+    # Forward
+    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(texc),
+                            torch.zeros_like(texc), view_dirs, None, 16)
+
+    # Synthetic target
+    target = torch.ones_like(rgb) * 0.5
+    loss = (rgb - target).abs().mean()
+    loss.backward()
+
+    # Check feature map grad
+    fm = model.feature_maps["__default__"]
+    assert fm.grad is not None, "Feature map grad is None"
+    assert not torch.allclose(fm.grad, torch.zeros_like(fm.grad)), \
+        "Feature map grad is all zero — gradient did not flow"
+
+    # Check at least one MLP param grad
+    mlp_grad_any = False
+    for p in model.mlp.parameters():
+        if p.grad is not None and not torch.allclose(p.grad, torch.zeros_like(p.grad)):
+            mlp_grad_any = True
+            break
+    assert mlp_grad_any, "All MLP grads are zero — gradient did not flow to MLP"
+
+
+def test_nlm_empty_mask_returns_zeros():
+    """Empty mask (no valid pixels) returns zero rgb without error."""
+    model = _make_nlm_model(resolution=8)
+
+    rast_out = torch.zeros(1, 8, 8, 4, device=model.device)  # all background
+    texc = torch.rand(1, 8, 8, 2, device=model.device)
+    view_dirs = torch.zeros(1, 8, 8, 3, device=model.device)
+
+    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(texc),
+                            torch.zeros_like(texc), view_dirs, None, 8)
+    assert rgb.shape == (1, 8, 8, 3)
+    assert (rgb == 0).all()
+    assert (mask == 0).all()
