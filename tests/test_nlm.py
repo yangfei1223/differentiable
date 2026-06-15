@@ -130,3 +130,47 @@ def test_base_hooks_exist_with_defaults():
         m.get_submesh_texture("test")
     # post_backward_hook returns None (no-op)
     assert m.post_backward_hook() is None
+
+
+def test_pbr_regularization_loss_shape():
+    """PBR regularization_loss returns scalar tensor."""
+    from src.config import Config
+    from src.shading.pbr_model import PBRShadingModel
+
+    cfg = Config()
+    cfg.render_mode = "pbr"
+    model = PBRShadingModel(cfg)
+    # Need to init env_map for regularization to be computable
+    from src.shading.pbr.env_map import EnvironmentMap
+    model.env_map = EnvironmentMap(256, 512)
+    reg = model.regularization_loss()
+    assert reg.dim() == 0 or reg.numel() == 1
+
+
+def test_pbr_get_submesh_texture():
+    """PBR.get_submesh_texture returns the named mat_texture."""
+    import torch
+    import torch.nn as nn
+    from src.config import Config
+    from src.shading.pbr_model import PBRShadingModel
+
+    cfg = Config()
+    cfg.render_mode = "pbr"
+    model = PBRShadingModel(cfg)
+    model.is_multi = True
+    fake = nn.Parameter(torch.zeros(1, 4, 4, 8))
+    model.mat_textures = {"Object_0": fake}
+    out = model.get_submesh_texture("Object_0")
+    assert out is fake
+
+
+def test_pbr_post_backward_hook_noop():
+    """PBR post_backward_hook runs without error when no frozen normals."""
+    from src.config import Config
+    from src.shading.pbr_model import PBRShadingModel
+
+    cfg = Config()
+    cfg.render_mode = "pbr"
+    model = PBRShadingModel(cfg)
+    # Should not raise
+    model.post_backward_hook()

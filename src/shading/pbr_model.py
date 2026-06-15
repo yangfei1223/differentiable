@@ -13,6 +13,7 @@ from src.shading.base import ShadingModel
 from src.shading.pbr.material import init_material_texture, decode_material, compute_F0
 from src.shading.pbr.env_map import EnvironmentMap
 from src.shading.pbr.brdf_lut import generate_brdf_lut, sample_brdf
+from src.losses import tv_loss
 
 
 class PBRShadingModel(ShadingModel):
@@ -322,3 +323,31 @@ class PBRShadingModel(ShadingModel):
         p = os.path.join(output_dir, "env_map.png")
         self.env_map.export_image(p); paths.append(p)
         return paths
+
+    # ------------------------------------------------------------------
+    # Multi-mesh training hooks
+    # ------------------------------------------------------------------
+    def regularization_loss(self) -> torch.Tensor:
+        """Env map TV + L2 regularization."""
+        if self.env_map is None:
+            return torch.tensor(0.0, device=self.device)
+        env_tv = tv_loss(self.env_map.raw) * self.config.pbr.env_tv_weight
+        env_decoded = self.env_map.decode()
+        env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
+        return env_tv + env_l2
+
+    def get_submesh_texture(self, name: str) -> torch.Tensor:
+        """Return the named submesh's material texture (for TV loss)."""
+        return self.mat_textures[name]
+
+    def post_backward_hook(self) -> None:
+        """Freeze normal map channel gradients (channels 5:8)."""
+        if not self.config.pbr.disable_normal_map:
+            return
+        if self.is_multi:
+            for tex in self.mat_textures.values():
+                if tex.grad is not None:
+                    tex.grad[..., 5:8].zero_()
+        else:
+            if self.mat_texture is not None and self.mat_texture.grad is not None:
+                self.mat_texture.grad[..., 5:8].zero_()
