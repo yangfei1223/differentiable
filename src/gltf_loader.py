@@ -102,8 +102,9 @@ def load_gltf(path: str | Path) -> list[dict[str, Any]]:
                 t = np.array(node.translation, dtype=np.float64)
                 local[:3, 3] = t
             if node.rotation is not None:
-                q = np.array(node.rotation, dtype=np.float64)  # wxyz
-                qx, qy, qz, qw = q[1], q[2], q[3], q[0]
+                # glTF spec: quaternion stored as [x, y, z, w]
+                q = np.array(node.rotation, dtype=np.float64)  # xyzw
+                qx, qy, qz, qw = q[0], q[1], q[2], q[3]
                 r = np.eye(4, dtype=np.float64)
                 r[0, 0] = 1 - 2*(qy*qy + qz*qz)
                 r[0, 1] = 2*(qx*qy - qw*qz)
