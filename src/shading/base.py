@@ -47,3 +47,29 @@ class ShadingModel:
 
     def load_state_dict(self, state: dict) -> None:
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Optional hooks for multi-mesh training (used by PBR and NLM)
+    # ------------------------------------------------------------------
+    def regularization_loss(self) -> "torch.Tensor":
+        """Global regularization loss (e.g., PBR env_map TV/L2).
+
+        Returns:
+            Scalar tensor. Default 0 (no global regularization).
+        """
+        import torch
+        return torch.tensor(0.0)
+
+    def get_submesh_texture(self, name: str) -> "torch.Tensor":
+        """Return the optimizable texture for the named submesh (for TV loss).
+
+        Subclasses participating in multi-mesh training must override this.
+        """
+        raise NotImplementedError
+
+    def post_backward_hook(self) -> None:
+        """Cleanup hook called after backward() (e.g., PBR freezes normal grads).
+
+        Default: no-op.
+        """
+        pass

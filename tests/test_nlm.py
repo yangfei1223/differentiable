@@ -115,3 +115,18 @@ nlm:
     assert cfg.nlm.feature_dim == 16
     assert cfg.nlm.pe_level == 3
     assert cfg.nlm.feature_lr == 0.05
+
+
+def test_base_hooks_exist_with_defaults():
+    """ShadingModel base provides default hook implementations."""
+    from src.shading.base import ShadingModel
+
+    m = ShadingModel()
+    # regularization_loss returns 0 tensor
+    reg = m.regularization_loss()
+    assert reg.item() == 0.0
+    # get_submesh_texture raises (subclass must override)
+    with pytest.raises(NotImplementedError):
+        m.get_submesh_texture("test")
+    # post_backward_hook returns None (no-op)
+    assert m.post_backward_hook() is None
