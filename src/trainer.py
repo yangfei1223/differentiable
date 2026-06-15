@@ -272,14 +272,11 @@ class Trainer:
     # ------------------------------------------------------------------
     # Multi-mesh gradient accumulation
     # ------------------------------------------------------------------
-    def _train_step_multi_pbr(self, camera, gt: torch.Tensor) -> float:
-        """Multi-mesh PBR 训练步 — 逐 submesh 梯度累积，降低峰值显存。
+    def _train_step_multi(self, camera, gt: torch.Tensor) -> float:
+        """Multi-mesh gradient accumulation step (PBR + NLM).
 
-        将「6 submesh 全部 forward → 一起 backward」改为：
-        1. no-grad 深度 ownership 判定
-        2. 逐 submesh forward + loss + backward，梯度累积
-
-        峰值显存从 ~15 GB 降至 ~3 GB（2048 分辨率）。
+        Per-submesh forward + backward with gradient accumulation.
+        Uses model hooks for regularization, TV loss, and post-backward cleanup.
 
         Args:
             camera: Camera 对象。
@@ -292,7 +289,7 @@ class Trainer:
 
         res = self.current_resolution
 
-        # --- Phase 1: no-grad 深度 ownership ---
+        # --- Phase 1: no-grad depth ownership ---
         with torch.no_grad():
             ownership = torch.full(
                 (1, res, res), -1, dtype=torch.long, device=self.device
@@ -314,7 +311,6 @@ class Trainer:
                 depth_buf = torch.where(is_front, depth_sub, depth_buf)
                 mask = torch.max(mask, mask_sub)
 
-        # 翻转到图像坐标
         mask = mask.flip(1)
         ownership = ownership.flip(1)
 
@@ -326,25 +322,21 @@ class Trainer:
         gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
         gt_linear = gt_resized.clamp(0, 1).pow(2.2)
 
-        # --- Phase 2: 环境贴图正则化（一次） ---
-        env_tv = tv_loss(self.model.env_map.raw) * self.config.pbr.env_tv_weight
-        env_decoded = self.model.env_map.decode()
-        env_l2 = (env_decoded ** 2).mean() * self.config.pbr.env_l2_weight
-        env_loss = env_tv + env_l2
-        env_loss.backward()
-        total_loss = env_loss.item()
+        # --- Phase 2: global regularization (PBR: env TV/L2; NLM: 0) ---
+        reg_loss = self.model.regularization_loss()
+        if reg_loss.requires_grad:
+            reg_loss.backward()
+        total_loss = reg_loss.item()
 
-        # --- Phase 3: 逐 submesh 梯度累积 ---
+        # --- Phase 3: per-submesh gradient accumulation ---
         n_valid = mask.sum() * 3 + 1e-8
 
         for k, sub_name in enumerate(self.submesh_names):
             sub_mask = (ownership == k).float()
 
-            # 跳过无可见像素的 submesh
             if sub_mask.sum() < 1:
                 continue
 
-            # Forward (with grad)
             sub_renderer = self.renderers[sub_name]
             rast, texc, wpos, inorm, vdir, tang, btang = (
                 sub_renderer.rasterize_and_interpolate(camera)
@@ -356,39 +348,45 @@ class Trainer:
 
             pixel_mask = (sub_mask * mask).unsqueeze(-1)
 
-            # L1（逐像素，等价于原始实现）
+            # L1
             abs_diff = (rgb_sub - gt_linear).abs() * pixel_mask
             l1 = abs_diff.sum() / n_valid
 
-            # SSIM（近似：非本 submesh 像素用 GT 填充）
+            # SSIM (approximate: fill non-submesh pixels with GT)
             sub_rendered_full = rgb_sub * pixel_mask + gt_linear * (1 - pixel_mask)
             rendered_chw = sub_rendered_full.permute(0, 3, 1, 2)
             gt_chw = gt_linear.permute(0, 3, 1, 2)
             ssim = ssim_loss(rendered_chw, gt_chw)
 
-            # TV（直接作用于参数，梯度正确传播）
-            tv = tv_loss(self.model.mat_textures[sub_name])
+            # TV on submesh texture (PBR: mat_texture; NLM: feature_map)
+            tv = tv_loss(self.model.get_submesh_texture(sub_name))
 
-            loss = (
-                self.config.loss.lambda_l1 * l1
-                + self.config.loss.lambda_ssim * ssim
-                + self.config.loss.lambda_tv * tv
-            )
+            # NLM uses smaller TV weight (feature_tv_weight ~1e-5 vs loss.lambda_tv ~0.005)
+            if self.config.render_mode == "nlm":
+                # Scale: use NLM's own TV weight directly
+                nlm_tv_weight = self.config.nlm.feature_tv_weight
+                loss = (
+                    self.config.loss.lambda_l1 * l1
+                    + self.config.loss.lambda_ssim * ssim
+                    + nlm_tv_weight * tv
+                )
+            else:
+                loss = (
+                    self.config.loss.lambda_l1 * l1
+                    + self.config.loss.lambda_ssim * ssim
+                    + self.config.loss.lambda_tv * tv
+                )
 
-            loss.backward()  # 梯度累积
+            loss.backward()
             total_loss += loss.item()
 
-        # 防止梯度 NaN（nvdiffrast 边界采样偶发）
-        if self.model.env_map.raw.grad is not None:
-            self.model.env_map.raw.grad = torch.nan_to_num(
-                self.model.env_map.raw.grad, nan=0.0
-            )
-        for tex in self.model.mat_textures.values():
-            if tex.grad is not None:
-                tex.grad = torch.nan_to_num(tex.grad, nan=0.0)
+        # --- Phase 4: NaN cleanup (all params) ---
+        for p in self.model.parameters():
+            if p.grad is not None:
+                p.grad = torch.nan_to_num(p.grad, nan=0.0)
 
-        # 冻结法线贴图 normal 通道
-        self._freeze_normal_grads()
+        # --- Phase 5: post-backward hook (PBR: freeze normals; NLM: noop) ---
+        self.model.post_backward_hook()
 
         return total_loss
 
@@ -513,9 +511,9 @@ class Trainer:
                 img_np, camera = self.dataset[idx]
                 gt = torch.from_numpy(img_np).unsqueeze(0).to(self.device)  # [1, 3, H_gt, W_gt]
 
-                if self.is_multi and self.config.render_mode == "pbr":
-                    # Multi-mesh PBR: per-submesh gradient accumulation
-                    step_loss = self._train_step_multi_pbr(camera, gt)
+                if self.is_multi and self.config.render_mode in ("pbr", "nlm"):
+                    # Multi-mesh gradient accumulation (PBR or NLM)
+                    step_loss = self._train_step_multi(camera, gt)
                 else:
                     # SH or single-mesh PBR (original path)
                     if self.config.render_mode == "sh":
