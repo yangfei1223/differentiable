@@ -12,5 +12,8 @@ def create_shading_model(render_mode: str, config: Config):
     elif render_mode == "pbr":
         from src.shading.pbr_model import PBRShadingModel
         return PBRShadingModel(config)
+    elif render_mode == "nlm":
+        from src.shading.nlm_model import NeuralLightmapShadingModel
+        return NeuralLightmapShadingModel(config)
     else:
         raise ValueError(f"Unknown render_mode: {render_mode!r}")

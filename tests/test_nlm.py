@@ -305,3 +305,20 @@ def test_nlm_empty_mask_returns_zeros():
     assert rgb.shape == (1, 8, 8, 3)
     assert (rgb == 0).all()
     assert (mask == 0).all()
+
+
+# =========================================================================
+# Task 9: Factory Registration
+# =========================================================================
+
+
+def test_create_shading_model_nlm():
+    """Factory creates NLM model for render_mode='nlm'."""
+    from src.config import Config
+    from src.shading import create_shading_model
+    from src.shading.nlm_model import NeuralLightmapShadingModel
+
+    cfg = Config()
+    cfg.render_mode = "nlm"
+    model = create_shading_model("nlm", cfg)
+    assert isinstance(model, NeuralLightmapShadingModel)
