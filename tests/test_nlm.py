@@ -33,3 +33,32 @@ def test_positional_encode_zero_input():
     assert torch.allclose(out[0, 3:6], torch.zeros(3), atol=1e-6)
     # Next 3 channels: cos(2^0 * pi * 0) = cos(0) = 1
     assert torch.allclose(out[0, 6:9], torch.ones(3), atol=1e-6)
+
+
+def test_tiny_mlp_shape():
+    """TinyMLP maps 27D → 3D."""
+    from src.shading.nlm.tiny_mlp import TinyMLP
+
+    mlp = TinyMLP(in_dim=27, hidden_dim=32, out_dim=3)
+    x = torch.randn(10, 27)
+    out = mlp(x)
+    assert out.shape == (10, 3)
+
+
+def test_tiny_mlp_non_negative_output():
+    """Softplus output is non-negative (HDR radiance ≥ 0)."""
+    from src.shading.nlm.tiny_mlp import TinyMLP
+
+    mlp = TinyMLP(in_dim=27, hidden_dim=32, out_dim=3)
+    x = torch.randn(100, 27) * 10  # extreme inputs
+    out = mlp(x)
+    assert (out >= 0).all(), "Softplus output must be non-negative"
+
+
+def test_tiny_mlp_param_count():
+    """~2K params (27*32 + 32 + 32*32 + 32 + 32*3 + 3 = 2019)."""
+    from src.shading.nlm.tiny_mlp import TinyMLP
+
+    mlp = TinyMLP(in_dim=27, hidden_dim=32, out_dim=3)
+    n = sum(p.numel() for p in mlp.parameters())
+    assert 1500 < n < 3500, f"Expected ~2K params, got {n}"
