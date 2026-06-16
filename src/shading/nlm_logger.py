@@ -109,11 +109,23 @@ class NLMLogger(ShadingLogger):
                     rast, texc, wpos, inorm, vdir, tang, btang = renderer_or_renderers.rasterize_and_interpolate(camera)
                     rendered, mask = model.shade(rast, texc, wpos, inorm, vdir, camera, resolution)
 
-            # Feature visualization (first 3 channels of __default__ or first submesh)
+            # Feature visualization via PCA (12D -> 3D)
             debug = model.get_debug_info()
-            feature = debug.get("feature", rendered * 0)
-            feat_vis = feature[..., :3].clamp(-1, 1)
-            feat_vis = (feat_vis + 1) * 0.5  # to [0,1]
+            feature = debug.get("feature", rendered * 0)  # [1, H, W, C]
+            feat_flat = feature.reshape(-1, feature.shape[-1])  # [H*W, C]
+            if feat_flat.shape[0] > 1:
+                # PCA: subtract mean, SVD, take first 3 components
+                mean = feat_flat.mean(dim=0, keepdim=True)
+                centered = feat_flat - mean
+                U, S, Vh = torch.linalg.svd(centered, full_matrices=False)
+                proj = centered @ Vh[:3, :].T  # [N, 3]
+                # Normalize to [0,1]
+                proj = proj - proj.min(dim=0, keepdim=True).values
+                rng = proj.max(dim=0, keepdim=True).values + 1e-8
+                proj = proj / rng
+                feat_vis = proj.reshape(1, feature.shape[1], feature.shape[2], 3)
+            else:
+                feat_vis = torch.zeros(1, feature.shape[1], feature.shape[2], 3, device=feature.device)
 
             mask = mask.flip(1)
             mask_np = mask[0].cpu().numpy()
@@ -128,11 +140,22 @@ class NLMLogger(ShadingLogger):
                 return bgr
 
             gt = cv2.cvtColor((img_np.transpose(1, 2, 0) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+
+            # Residual: |rendered - gt_linear| in linear space
+            import torch.nn.functional as F
+            gt_hw = torch.from_numpy(img_np).unsqueeze(0).to(rendered.device).permute(0, 1, 2, 3)
+            gt_resized = F.interpolate(gt_hw, size=(rendered.shape[1], rendered.shape[2]),
+                                       mode="bilinear", align_corners=False)
+            gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
+            gt_linear = gt_resized.clamp(0, 1).pow(2.2)
+            rendered_flipped = rendered.flip(1)
+            residual = (rendered_flipped - gt_linear).abs().clamp(0, 1)
+
             panels = [
                 (gt, "GT"),
                 (to_bgr(rendered), "NLM"),
-                (to_bgr(feat_vis, gamma=False), "Feature[0:3]"),
-                (to_bgr(rendered * 0 + 0.5, gamma=False), "Residual"),
+                (to_bgr(feat_vis, gamma=False), "Feature PCA"),
+                (to_bgr(residual, gamma=False), "Residual"),
             ]
 
             th = min(p[0].shape[0] for p in panels)

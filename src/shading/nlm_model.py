@@ -212,15 +212,26 @@ class NeuralLightmapShadingModel(ShadingModel):
         os.makedirs(output_dir, exist_ok=True)
         paths = []
 
-        # Feature map PNG (first 3 channels) + PT (full)
+        # Feature map PNG (PCA to 3D) + PT (full)
         for name, fm in self.feature_maps.items():
             sub_dir = output_dir if not self.is_multi else os.path.join(output_dir, name)
             if self.is_multi:
                 os.makedirs(sub_dir, exist_ok=True)
 
-            # PNG: first 3 channels normalized to [0,255]
-            vis = fm[0, ..., :3].clamp(-1, 1)  # feature may be negative
-            vis = ((vis + 1) * 0.5 * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+            # PCA: 12D -> 3D for visualization
+            fm_flat = fm[0].reshape(-1, fm.shape[-1])  # [H*W, C]
+            if fm_flat.shape[0] > 1:
+                mean = fm_flat.mean(dim=0, keepdim=True)
+                centered = fm_flat - mean
+                _, _, Vh = torch.linalg.svd(centered, full_matrices=False)
+                proj = centered @ Vh[:3, :].T  # [N, 3]
+                proj = proj - proj.min(dim=0, keepdim=True).values
+                rng = proj.max(dim=0, keepdim=True).values + 1e-8
+                proj = proj / rng
+                vis = proj.reshape(fm.shape[1], fm.shape[2], 3)
+            else:
+                vis = torch.zeros(fm.shape[1], fm.shape[2], 3)
+            vis = (vis * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
             png_path = os.path.join(sub_dir, f"feature_map_{name}.png")
             Image.fromarray(vis, "RGB").save(png_path)
             paths.append(png_path)
