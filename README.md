@@ -1,23 +1,27 @@
 # 可微烘焙管线 (Differentiable Baking Pipeline)
 
-基于 PyTorch + nvdiffrast 的可微渲染烘焙管线，将高模多视角 GT 渲染图反向优化为低模纹理。支持 **SH 辐射场** 和 **Split-Sum PBR** 两种着色模型，面向移动端部署。
+基于 PyTorch + nvdiffrast 的可微渲染烘焙管线，将高模多视角 GT 渲染图反向优化为低模纹理。支持 **SH 辐射场**、**Split-Sum PBR** 和 **Neural Lightmap** 三种着色模型，面向移动端部署。
 
 ## 训练结果
 
 | 场景 | 着色模型 | PSNR | 纹理分辨率 | 报告 |
 |------|---------|------|-----------|------|
 | 头盔 | SH (order 2) | 13.19 dB | 2048×2048 | [Helmet SH](docs/reports/01_Helmet_SH.md) |
-| 头盔 | PBR (split-sum, frozen normal) | **20.81 dB** | 2048×2048 | [Helmet PBR](docs/reports/03_Helmet_PBR.md) |
+| 头盔 | PBR (split-sum, frozen normal) | 20.81 dB | 2048×2048 | [Helmet PBR](docs/reports/03_Helmet_PBR.md) |
+| 头盔 | Neural Lightmap (L2 reflect) | **22.01 dB** | 2048×2048 | [Helmet NLM](docs/reports/05_Helmet_NLM.md) |
 | 钢琴 | SH (order 2) | 20.37 dB | 2048×2048 | [Piano SH](docs/reports/02_Piano_SH.md) |
 | 钢琴 | PBR multi-mesh (frozen normal) | **28.80 dB** | 6×1024×1024 | [Piano PBR](docs/reports/04_Piano_PBR.md) |
+| 钢琴 | Neural Lightmap (large config) | **28.08 dB** | 6×1024×1024 | [Piano NLM](docs/reports/06_Piano_NLM.md) |
 
-> 头盔含金属面罩，PBR split-sum 捕捉镜面反射提升 +7.6 dB；钢琴多 mesh + 冻结法线消除"水渍"伪影，PSNR 从 21.95 → 28.80 dB（+6.85 dB）。
+> 头盔 NLM 超过 PBR（+1.2 dB），反射方向编码 PE(R) 有效捕捉镜面高光；钢琴 NLM 接近 PBR（-0.43 dB），大参数配置（feature_dim=24, PE L=4）弥补多 submesh 容量需求。
 
 ### 关键技术改进
 
 - **法线贴图冻结**：从 GLB 提取或外部加载法线贴图，烘焙进 normal 通道后冻结，训练中不优化。消除法线优化噪声导致的"水渍"高光伪影
 - **逐 submesh 梯度累积**：多 mesh 场景逐 submesh 累积梯度，VRAM 从 14.8GB 降至 6.3GB
 - **NaN 梯度清理**：nvdiffrast 边界采样偶发 NaN，`nan_to_num` 清理 env_map 和纹理梯度
+- **GLB 加载统一**：所有 GLB/GLTF 走 gltf_loader 路径，单 mesh 包装为 1-submesh MultiMeshData，消除 single/multi 分歧
+- **glTF 四元数修复**：四元数解析从 `[w,x,y,z]` 改为 `[x,y,z,w]`（glTF 规范），修复根节点 rotation 错误
 
 ## 功能
 
@@ -44,7 +48,14 @@
 - **多 mesh 支持** — 逐 submesh 梯度累积 + depth-based 合成
 - **联合优化** — 材质贴图 + 环境贴图同时优化，TV + L2 正则化防爆炸
 - **分量视频** — Diffuse / Specular 分离环绕视频
-- **可插拔着色模型** — `ShadingModel` 协议 + 工厂函数，SH/PBR 透明切换
+- **可插拔着色模型** — `ShadingModel` 协议 + 工厂函数，SH/PBR/NLM 透明切换
+
+### Neural Lightmap (v0.4)
+- **Per-submesh 神经特征图** — 每个子 mesh 独立可学习特征纹理 `[1,H,W,C]`，隐式编码 albedo/normals/AO/光照积分
+- **反射方向编码** — PE(R) L=2/L=4 高频位置编码 + NdotV Fresnel 标量，建模视角相关镜面反射
+- **TinyMLP 解码器** — 全局共享微型 MLP（2K~8K 参数），Softplus 输出允许 HDR 辐射度
+- **TTUR 双学习率** — 特征图高学习率（0.1）追赶局部梯度，MLP 低学习率（0.001）防过拟合
+- **掩码索引前向** — 仅有效像素过 MLP，节省 ~80% 背景算力
 
 ## 项目结构
 
@@ -63,18 +74,25 @@
 │   ├── utils.py               # 可视化工具
 │   ├── config.py              # YAML 配置系统
 │   └── shading/
-│       ├── __init__.py        # create_shading_model 工厂
-│       ├── base.py            # ShadingModel 协议
+│       ├── __init__.py        # create_shading_model 工厂 (sh/pbr/nlm)
+│       ├── base.py            # ShadingModel 协议 + 多 mesh 训练钩子
 │       ├── logger.py          # ShadingLogger 基类 + 工厂
 │       ├── sh_model.py        # SHShadingModel
 │       ├── sh_logger.py       # SH 调试日志
 │       ├── pbr_model.py       # PBRShadingModel (split-sum + TBN)
 │       ├── pbr_logger.py      # PBR 调试日志 + 分量视频
-│       └── pbr/
+│       ├── nlm_model.py       # NeuralLightmapShadingModel (特征图+MLP)
+│       ├── nlm_logger.py      # NLM 调试日志 (PCA 可视化 + 残差)
+│       ├── pbr/
+│       │   ├── __init__.py
+│       │   ├── material.py    # 8ch sigmoid 材质参数化
+│       │   ├── env_map.py     # EnvironmentMap (nn.Module)
+│       │   └── brdf_lut.py    # GGX BRDF LUT generation
+│       └── nlm/
 │           ├── __init__.py
-│           ├── material.py    # 8ch sigmoid 材质参数化
-│           ├── env_map.py     # EnvironmentMap (nn.Module)
-│           └── brdf_lut.py    # GGX BRDF LUT generation
+│           ├── feature_map.py        # 特征图初始化
+│           ├── positional_encode.py  # NeRF 风格 PE γ(d)
+│           └── tiny_mlp.py           # TinyMLP 解码器 (Softplus HDR)
 ├── scripts/
 │   ├── blender_export.py      # Blender 数据导出脚本
 │   ├── run_ablation.py        # SH0 vs SH2 对照实验
@@ -88,6 +106,9 @@
 │   ├── train_pbr_piano.yaml   # 钢琴 PBR 配置
 │   ├── train_pbr_piano_multi_no_normal.yaml  # 钢琴多 mesh 冻结法线
 │   ├── train_pbr_helmet_no_normal.yaml       # 头盔冻结法线
+│   ├── train_nlm_helmet.yaml                 # 头盔 NLM (L2 reflect)
+│   ├── train_nlm_piano_multi.yaml            # 钢琴 NLM (小参数)
+│   ├── train_nlm_piano_multi_large.yaml      # 钢琴 NLM (大参数)
 │   └── quick_test.yaml        # 快速验证
 ├── docs/reports/              # 实验报告
 ├── resource/                  # 报告用图片/视频资源
@@ -210,6 +231,12 @@ python main.py --config configs/train_pbr_helmet_no_normal.yaml --mode train --o
 
 # PBR + 多 mesh + 冻结法线（钢琴）
 python main.py --config configs/train_pbr_piano_multi_no_normal.yaml --mode train --output output/piano_no_normal
+
+# Neural Lightmap（头盔，L2 reflect 编码）
+python main.py --config configs/train_nlm_helmet.yaml --mode train --output output/helmet_nlm
+
+# Neural Lightmap（钢琴，大参数配置）
+python main.py --config configs/train_nlm_piano_multi_large.yaml --mode train --output output/piano_nlm_large
 
 # 断点续训
 python main.py --config configs/train_pbr.yaml --mode train --resume output/{dataset}/checkpoint.pt
