@@ -141,21 +141,26 @@ class NLMLogger(ShadingLogger):
 
             gt = cv2.cvtColor((img_np.transpose(1, 2, 0) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
 
-            # Residual: |rendered - gt_linear| in linear space
+            # Residual: compute in display space (both top-to-bottom)
             import torch.nn.functional as F
             gt_hw = torch.from_numpy(img_np).unsqueeze(0).to(rendered.device).permute(0, 1, 2, 3)
             gt_resized = F.interpolate(gt_hw, size=(rendered.shape[1], rendered.shape[2]),
                                        mode="bilinear", align_corners=False)
             gt_resized = gt_resized.squeeze(0).permute(1, 2, 0).unsqueeze(0)
             gt_linear = gt_resized.clamp(0, 1).pow(2.2)
-            rendered_flipped = rendered.flip(1)
-            residual = (rendered_flipped - gt_linear).abs().clamp(0, 1)
+            # rendered is rasterization space (bottom-to-top), flip to display space
+            rendered_disp = rendered[0].flip(0).clamp(0, 1)
+            residual_disp = (rendered_disp - gt_linear[0]).abs().clamp(0, 1)
+            # to_bgr without flip (already in display space)
+            residual_np = (residual_disp.detach().cpu().numpy() * 255).astype(np.uint8)
+            residual_bgr = cv2.cvtColor(residual_np, cv2.COLOR_RGB2BGR)
+            residual_bgr[mask_np < 0.5] = 0
 
             panels = [
                 (gt, "GT"),
                 (to_bgr(rendered), "NLM"),
                 (to_bgr(feat_vis, gamma=False), "Feature PCA"),
-                (to_bgr(residual, gamma=False), "Residual"),
+                (residual_bgr, "Residual"),
             ]
 
             th = min(p[0].shape[0] for p in panels)
