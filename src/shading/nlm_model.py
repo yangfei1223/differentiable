@@ -28,8 +28,11 @@ class NeuralLightmapShadingModel(ShadingModel):
         nlm = config.nlm
         self.feature_dim = nlm.feature_dim
         self.pe_level = nlm.pe_level
+        self.encoding_mode = nlm.encoding_mode  # "view" | "reflect"
         self.pe_dim = 3 * (1 + 2 * nlm.pe_level)  # L=2 -> 15
-        self.mlp_in_dim = self.feature_dim + self.pe_dim  # 12 + 15 = 27
+        # reflect mode adds 1D NdotV scalar
+        extra_dim = 1 if self.encoding_mode == "reflect" else 0
+        self.mlp_in_dim = self.feature_dim + self.pe_dim + extra_dim  # 28 or 27
 
         self.feature_maps: dict[str, nn.Parameter] = {}
         self.mlp: TinyMLP = TinyMLP(
@@ -119,11 +122,18 @@ class NeuralLightmapShadingModel(ShadingModel):
         feat_valid = feature[mask]                     # [N, C]
         view_valid = view_dirs[mask]                   # [N, 3]
 
-        # 4. Positional encode view direction
-        view_pe = positional_encode(view_valid, self.pe_level)  # [N, pe_dim]
-
-        # 5. Concat & decode
-        x = torch.cat([feat_valid, view_pe], dim=-1)   # [N, C+pe_dim]
+        # 4. Encode direction
+        if self.encoding_mode == "reflect":
+            # Reflect mode: R = 2(N.V)N - V, plus NdotV scalar
+            norm_valid = normals[mask]                 # [N, 3]
+            ndotv = (norm_valid * view_valid).sum(dim=-1, keepdim=True).clamp(0, 1)  # [N, 1]
+            reflect = 2.0 * ndotv * norm_valid - view_valid  # [N, 3]
+            dir_pe = positional_encode(reflect, self.pe_level)  # [N, pe_dim]
+            x = torch.cat([feat_valid, dir_pe, ndotv], dim=-1)  # [N, C+pe_dim+1]
+        else:
+            # View mode: PE(V) only (L0 baseline)
+            view_pe = positional_encode(view_valid, self.pe_level)  # [N, pe_dim]
+            x = torch.cat([feat_valid, view_pe], dim=-1)  # [N, C+pe_dim]
         rgb_valid = self.mlp(x)                        # [N, 3], Softplus >= 0
 
         # 6. Scatter back to full image

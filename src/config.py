@@ -24,6 +24,7 @@ class PBRConfig:
 class NeuralLightmapConfig:
     feature_dim: int = 12              # 特征维度 C
     pe_level: int = 2                  # 视角 PE 阶数 L（→ 15D）
+    encoding_mode: str = "reflect"     # "view"=PE(V) | "reflect"=PE(R)+NdotV
     mlp_hidden_dim: int = 32           # MLP 隐藏层宽度
     feature_lr: float = 0.1            # 特征纹理学习率（TTUR 大值）
     mlp_lr: float = 0.001              # MLP 学习率（TTUR 小值）

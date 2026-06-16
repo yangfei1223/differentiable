@@ -268,9 +268,13 @@ def test_nlm_gradient_connectivity():
     view_dirs = torch.randn(1, 16, 16, 3, device=model.device)
     view_dirs = view_dirs / view_dirs.norm(dim=-1, keepdim=True)
 
+    # Fake normals (normalized, pointing up)
+    normals = torch.zeros(1, 16, 16, 3, device=model.device)
+    normals[..., 2] = 1.0
+
     # Forward
-    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(texc),
-                            torch.zeros_like(texc), view_dirs, None, 16)
+    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(view_dirs),
+                            normals, view_dirs, None, 16)
 
     # Synthetic target
     target = torch.ones_like(rgb) * 0.5
@@ -299,9 +303,10 @@ def test_nlm_empty_mask_returns_zeros():
     rast_out = torch.zeros(1, 8, 8, 4, device=model.device)  # all background
     texc = torch.rand(1, 8, 8, 2, device=model.device)
     view_dirs = torch.zeros(1, 8, 8, 3, device=model.device)
+    normals = torch.zeros(1, 8, 8, 3, device=model.device)
 
-    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(texc),
-                            torch.zeros_like(texc), view_dirs, None, 8)
+    rgb, mask = model.shade(rast_out, texc, torch.zeros_like(view_dirs),
+                            normals, view_dirs, None, 8)
     assert rgb.shape == (1, 8, 8, 3)
     assert (rgb == 0).all()
     assert (mask == 0).all()
