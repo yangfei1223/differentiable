@@ -29,6 +29,7 @@ class NeuralLightmapConfig:
     feature_lr: float = 0.1            # 特征纹理学习率（TTUR 大值）
     mlp_lr: float = 0.001              # MLP 学习率（TTUR 小值）
     feature_tv_weight: float = 0.00001 # 特征图 TV 正则
+    feature_l2_weight: float = 0.0001  # 特征图 L2 正则（防幅度爆炸）
     feature_init_std: float = 0.1      # 初始化标准差
 
 

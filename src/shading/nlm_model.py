@@ -171,8 +171,11 @@ class NeuralLightmapShadingModel(ShadingModel):
     # Multi-mesh training hooks
     # ------------------------------------------------------------------
     def regularization_loss(self) -> torch.Tensor:
-        """NLM has no global regularization (feature TV is per-submesh)."""
-        return torch.tensor(0.0, device=self.device)
+        """L2 regularization on feature maps (prevents magnitude explosion)."""
+        if not self.feature_maps or self.config.nlm.feature_l2_weight <= 0:
+            return torch.tensor(0.0, device=self.device)
+        l2 = sum((fm ** 2).mean() for fm in self.feature_maps.values())
+        return l2 * self.config.nlm.feature_l2_weight
 
     def get_submesh_texture(self, name: str) -> torch.Tensor:
         return self.feature_maps[name]
