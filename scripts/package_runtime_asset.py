@@ -11,13 +11,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import shutil
 import zipfile
 from pathlib import Path
-from typing import Optional
 
-from src.mesh import load_mesh, MultiMeshData
+from src.mesh import load_mesh
 
 
 SCHEMA_VERSION = 1
@@ -227,16 +224,10 @@ def package_asset(
         zf.write(brdf_lut_file, "textures/brdf_lut.png")
 
         # Per-submesh textures
-        for sub in submeshes:
+        sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
+        for i, sub in enumerate(submeshes):
             sub_name = sub["name"]
-            # Find source directory
-            sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
-            if sub_dirs:
-                # Multi-mesh: index matches
-                idx = [s["name"] for s in submeshes].index(sub_name)
-                src_dir = sub_dirs[idx]
-            else:
-                src_dir = epoch_dir
+            src_dir = sub_dirs[i] if sub_dirs else epoch_dir
 
             for tex_name in REQUIRED_SUBMESH_TEXTURES:
                 src = src_dir / f"{tex_name}.png"

@@ -172,7 +172,6 @@ def test_update_scenes_index_appends_entry(tmp_path):
         epoch=2000,
     )
 
-    import json
     data = json.loads(index_path.read_text())
     assert len(data) == 2
     assert data[0]["name"] == "helmet"
@@ -191,3 +190,124 @@ def test_update_scenes_index_appends_entry(tmp_path):
     assert len(data) == 2
     helmet = [e for e in data if e["name"] == "helmet"][0]
     assert helmet["psnr_db"] == 21.0
+
+
+def test_discover_submeshes_mismatch_raises(tmp_path):
+    """Multi-mesh subdir count must match GLB primitive count."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import discover_submeshes
+
+    epoch_dir = tmp_path / "epoch"
+    (epoch_dir / "Object_0").mkdir(parents=True)
+    # Need 4 fake textures in Object_0 so _build_submesh_entry doesn't fail first
+    for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
+        (epoch_dir / "Object_0" / tex).write_bytes(b"\x89PNG fake")
+
+    with pytest.raises(ValueError, match="Subdir count"):
+        discover_submeshes(epoch_dir, "test", ["mesh_0", "mesh_1"])
+
+
+def test_discover_submeshes_empty_glb_names(tmp_path):
+    """Empty glb_submesh_names falls back to scene_name."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import discover_submeshes
+
+    epoch_dir = tmp_path / "epoch"
+    epoch_dir.mkdir()
+    for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
+        (epoch_dir / tex).write_bytes(b"\x89PNG fake")
+
+    submeshes = discover_submeshes(epoch_dir, scene_name="fallback_name", glb_submesh_names=[])
+    assert len(submeshes) == 1
+    assert submeshes[0]["name"] == "fallback_name"
+
+
+def test_build_submesh_entry_missing_texture_raises(tmp_path):
+    """Missing required texture raises FileNotFoundError."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import _build_submesh_entry
+
+    tex_dir = tmp_path / "tex"
+    tex_dir.mkdir()
+    # Only create 3 of 4 required textures
+    for tex in ("base_color.png", "roughness.png", "metallic.png"):
+        (tex_dir / tex).write_bytes(b"\x89PNG fake")
+
+    with pytest.raises(FileNotFoundError, match="Missing required texture"):
+        _build_submesh_entry("test", tex_dir, "textures/test")
+
+
+def test_package_asset_missing_env_map_raises(tmp_path, monkeypatch):
+    """package_asset raises FileNotFoundError when env_map.png is missing."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import package_asset
+
+    glb_path = tmp_path / "scene.glb"
+    glb_path.write_bytes(b"fake")
+    epoch_dir = tmp_path / "epoch"
+    epoch_dir.mkdir()
+    for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
+        (epoch_dir / tex).write_bytes(b"\x89PNG fake")
+    # Note: NO env_map.png or brdf_lut.png
+
+    monkeypatch.setattr(
+        "scripts.package_runtime_asset.extract_glb_submesh_names",
+        lambda p: ["test"],
+    )
+
+    with pytest.raises(FileNotFoundError, match="env_map.png"):
+        package_asset(
+            glb_path=str(glb_path),
+            epoch_dir=epoch_dir,
+            scene_name="test",
+            output_path=tmp_path / "out.zip",
+            epoch=100,
+        )
+
+
+def test_extract_glb_submesh_names_single_mesh_fallback(monkeypatch):
+    """extract_glb_submesh_names handles MeshData (non-multi) fallback."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import extract_glb_submesh_names
+
+    class FakeSingleMesh:
+        name = "single_mesh_name"
+        # Note: no 'submeshes' attribute
+
+    monkeypatch.setattr(
+        "scripts.package_runtime_asset.load_mesh",
+        lambda p: FakeSingleMesh(),
+    )
+
+    names = extract_glb_submesh_names("dummy.glb")
+    assert names == ["single_mesh_name"]
+
+
+def test_extract_glb_submesh_names_no_name_uses_default(monkeypatch):
+    """extract_glb_submesh_names falls back to 'mesh_0' when mesh has no name."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import extract_glb_submesh_names
+
+    class FakeUnnamedMesh:
+        # No 'name' attribute at all
+        pass
+
+    monkeypatch.setattr(
+        "scripts.package_runtime_asset.load_mesh",
+        lambda p: FakeUnnamedMesh(),
+    )
+
+    names = extract_glb_submesh_names("dummy.glb")
+    assert names == ["mesh_0"]
