@@ -36,7 +36,7 @@ class PBRLogger(ShadingLogger):
 
         # 1. 导出 PBR 材质贴图: base_color, roughness, metallic, env_map
         model.export(output_dir)
-        # 保存 BRDF LUT (.pt + .png)
+        # 保存 BRDF LUT (.pt 数据 + .png 引擎格式 + _viz.png 调试图)
         brdf_path = os.path.join(output_dir, "brdf_lut.pt")
         torch.save(model.brdf_lut, brdf_path)
         self._export_brdf_lut_image(model.brdf_lut, output_dir)
@@ -188,30 +188,39 @@ class PBRLogger(ShadingLogger):
             cv2.imwrite(os.path.join(output_dir, f"compare_{ci:04d}.png"), canvas)
 
     def _export_brdf_lut_image(self, brdf_lut: torch.Tensor, output_dir: str) -> None:
-        """导出 BRDF LUT 为 PNG（左 scale / 右 bias 并排）。"""
+        """导出 BRDF LUT 为 PNG。
+
+        写两个文件：
+          - brdf_lut.png: 引擎友好数据格式 (256x256 RGB, R=scale, G=bias, B=0)
+          - brdf_lut_viz.png: 调试可视化 (左 scale / 右 bias 并排, VIRIDIS colormap)
+        """
+        from PIL import Image
         import cv2
+
         # brdf_lut: [size, size, 2] — scale 和 bias 各一个通道
         size = brdf_lut.shape[0]
         scale = brdf_lut[:, :, 0].numpy()  # [size, size]
         bias = brdf_lut[:, :, 1].numpy()
 
-        # 归一化到 [0, 255]
+        # ===== 1. 引擎友好数据 PNG (256x256 RGB) =====
+        # R 通道 = scale (F0 multiplier), G 通道 = bias (constant), B 通道 = 0
+        # 8-bit 量化 [0,1] float → [0,255] uint8 (BRDF LUT 不需要高精度)
+        data_rgb = np.zeros((size, size, 3), dtype=np.uint8)
+        data_rgb[:, :, 0] = (np.clip(scale, 0, 1) * 255).astype(np.uint8)
+        data_rgb[:, :, 1] = (np.clip(bias, 0, 1) * 255).astype(np.uint8)
+        Image.fromarray(data_rgb, 'RGB').save(os.path.join(output_dir, "brdf_lut.png"))
+
+        # ===== 2. 调试可视化 (保留原有 colormap + 并排 + 文字) =====
         scale_img = (scale * 255).clip(0, 255).astype(np.uint8)
         bias_img = (bias * 255).clip(0, 255).astype(np.uint8)
-
-        # 用 colormap 增强可读性
         scale_color = cv2.applyColorMap(scale_img, cv2.COLORMAP_VIRIDIS)
         bias_color = cv2.applyColorMap(bias_img, cv2.COLORMAP_VIRIDIS)
-
-        # 拼文字标签
         scale_color = cv2.putText(scale_color, "Scale (F0 mult)", (4, 20),
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         bias_color = cv2.putText(bias_color, "Bias (constant)", (4, 20),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-        # 并排拼接
+                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         canvas = np.concatenate([scale_color, bias_color], axis=1)
-        cv2.imwrite(os.path.join(output_dir, "brdf_lut.png"), canvas)
+        cv2.imwrite(os.path.join(output_dir, "brdf_lut_viz.png"), canvas)
 
     def render_component_video(self, model, mesh, output_dir, filename, mode, **vk):
         """渲染 diffuse/specular 单分量视频。

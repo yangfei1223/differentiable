@@ -245,15 +245,31 @@ def package_asset(
     if not env_map_file.exists():
         raise FileNotFoundError(f"Missing env_map.png: {env_map_file}")
 
-    # BRDF LUT: prefer .pt (real data) over .png (debug visualization)
+    # BRDF LUT: prefer brdf_lut.png (already data format from new logger);
+    # fall back to .pt regeneration for old epoch dirs.
     brdf_lut_pt_file = epoch_dir / "brdf_lut.pt"
     brdf_lut_png_file = epoch_dir / "brdf_lut.png"
     brdf_lut_data_png: bytes | None = None
-    if brdf_lut_pt_file.exists():
+    if brdf_lut_png_file.exists():
+        # Check if PNG is already the engine-friendly format (256x256).
+        # Old debug visualization is 512x256; trigger .pt fallback in that case.
+        from PIL import Image
+        try:
+            with Image.open(brdf_lut_png_file) as _img:
+                _w, _h = _img.size
+            if _w == 256 and _h == 256:
+                # New data format — use as-is
+                pass
+            elif brdf_lut_pt_file.exists():
+                brdf_lut_data_png = _export_brdf_lut_data_png(brdf_lut_pt_file)
+                print(f"  [INFO] brdf_lut.png is old debug format ({_w}x{_h}); regenerated from .pt")
+            else:
+                print(f"  [WARN] brdf_lut.png is debug format ({_w}x{_h}) and no .pt to regenerate from")
+        except Exception as e:
+            print(f"  [WARN] Failed to inspect brdf_lut.png: {e}; using as-is")
+    elif brdf_lut_pt_file.exists():
         brdf_lut_data_png = _export_brdf_lut_data_png(brdf_lut_pt_file)
-        print(f"  [INFO] Generated BRDF LUT data PNG from {brdf_lut_pt_file.name}")
-    elif brdf_lut_png_file.exists():
-        print(f"  [WARN] brdf_lut.pt not found; using {brdf_lut_png_file.name} (may be debug visualization)")
+        print(f"  [INFO] brdf_lut.png missing; generated from {brdf_lut_pt_file.name}")
     else:
         raise FileNotFoundError(f"Missing both brdf_lut.pt and brdf_lut.png in {epoch_dir}")
 

@@ -278,7 +278,7 @@ def test_package_asset_missing_env_map_raises(tmp_path, monkeypatch):
 
 
 def test_package_asset_generates_brdf_lut_from_pt(tmp_path, monkeypatch):
-    """When brdf_lut.pt exists, packaging regenerates a proper data PNG."""
+    """When brdf_lut.pt exists and png is old format, packaging regenerates proper data PNG."""
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -296,8 +296,10 @@ def test_package_asset_generates_brdf_lut_from_pt(tmp_path, monkeypatch):
     pt_path = tmp_path / "epoch" / "brdf_lut.pt"
     pt_path.parent.mkdir(parents=True)
     torch.save(fake_lut, pt_path)
-    # Also create brdf_lut.png to verify .pt takes precedence
-    (pt_path.parent / "brdf_lut.png").write_bytes(b"fake debug png")
+    # Create a valid but small PNG to simulate old debug format (not 256x256).
+    # This triggers .pt fallback regeneration in the new logic.
+    old_debug = Image.new('RGB', (1, 1))
+    old_debug.save(pt_path.parent / "brdf_lut.png")
 
     # Other required files
     glb_path = tmp_path / "scene.glb"
