@@ -169,6 +169,46 @@ def extract_glb_submesh_names(glb_path: str) -> list[str]:
     return [getattr(mesh, "name", None) or "mesh_0"]
 
 
+def _export_brdf_lut_data_png(brdf_lut_pt_path: Path) -> bytes:
+    """Convert brdf_lut.pt [256, 256, 2] float → 256×256 PNG bytes.
+
+    Channel mapping: R=scale, G=bias, B=0 (unused). 8-bit quantization
+    of [0,1] floats (sufficient precision for BRDF integration LUT).
+
+    Args:
+        brdf_lut_pt_path: Path to brdf_lut.pt file.
+
+    Returns:
+        PNG file bytes (256×256 RGB).
+    """
+    import io
+    import torch
+    from PIL import Image
+    import numpy as np
+
+    lut = torch.load(brdf_lut_pt_path, map_location='cpu')  # [256, 256, 2]
+    if lut.dim() == 3 and lut.shape[-1] == 2:
+        # Expected HWC layout
+        scale = lut[:, :, 0].numpy()
+        bias = lut[:, :, 1].numpy()
+    elif lut.dim() == 3 and lut.shape[0] == 2:
+        # Alternative CHW layout
+        scale = lut[0].numpy()
+        bias = lut[1].numpy()
+    else:
+        raise ValueError(f"Unexpected BRDF LUT shape: {lut.shape}")
+
+    size = scale.shape[0]  # 256
+    rgb = np.zeros((size, size, 3), dtype=np.uint8)
+    rgb[:, :, 0] = (np.clip(scale, 0, 1) * 255).astype(np.uint8)
+    rgb[:, :, 1] = (np.clip(bias, 0, 1) * 255).astype(np.uint8)
+    # B channel = 0 (unused by shader)
+
+    buf = io.BytesIO()
+    Image.fromarray(rgb, 'RGB').save(buf, format='PNG')
+    return buf.getvalue()
+
+
 def package_asset(
     glb_path: str,
     epoch_dir: Path,
@@ -200,13 +240,22 @@ def package_asset(
     # Discover texture submeshes
     submeshes = discover_submeshes(epoch_dir, scene_name, glb_submesh_names)
 
-    # Validate env_map + brdf_lut at top level
+    # Validate env_map at top level
     env_map_file = epoch_dir / "env_map.png"
-    brdf_lut_file = epoch_dir / "brdf_lut.png"
     if not env_map_file.exists():
         raise FileNotFoundError(f"Missing env_map.png: {env_map_file}")
-    if not brdf_lut_file.exists():
-        raise FileNotFoundError(f"Missing brdf_lut.png: {brdf_lut_file}")
+
+    # BRDF LUT: prefer .pt (real data) over .png (debug visualization)
+    brdf_lut_pt_file = epoch_dir / "brdf_lut.pt"
+    brdf_lut_png_file = epoch_dir / "brdf_lut.png"
+    brdf_lut_data_png: bytes | None = None
+    if brdf_lut_pt_file.exists():
+        brdf_lut_data_png = _export_brdf_lut_data_png(brdf_lut_pt_file)
+        print(f"  [INFO] Generated BRDF LUT data PNG from {brdf_lut_pt_file.name}")
+    elif brdf_lut_png_file.exists():
+        print(f"  [WARN] brdf_lut.pt not found; using {brdf_lut_png_file.name} (may be debug visualization)")
+    else:
+        raise FileNotFoundError(f"Missing both brdf_lut.pt and brdf_lut.png in {epoch_dir}")
 
     # Build manifest
     manifest = build_manifest(
@@ -227,9 +276,14 @@ def package_asset(
         # Geometry
         zf.write(glb_path, "geometry/scene.glb")
 
-        # Env map + BRDF LUT
+        # Env map
         zf.write(env_map_file, "textures/env_map.png")
-        zf.write(brdf_lut_file, "textures/brdf_lut.png")
+
+        # BRDF LUT: use regenerated data PNG if available, else fallback
+        if brdf_lut_data_png is not None:
+            zf.writestr("textures/brdf_lut.png", brdf_lut_data_png)
+        else:
+            zf.write(brdf_lut_png_file, "textures/brdf_lut.png")
 
         # Per-submesh textures
         # Detect layout: any subdirectory matching a submesh name → multi-mesh

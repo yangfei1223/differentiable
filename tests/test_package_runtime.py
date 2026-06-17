@@ -277,6 +277,63 @@ def test_package_asset_missing_env_map_raises(tmp_path, monkeypatch):
         )
 
 
+def test_package_asset_generates_brdf_lut_from_pt(tmp_path, monkeypatch):
+    """When brdf_lut.pt exists, packaging regenerates a proper data PNG."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import package_asset
+    import zipfile
+    import io
+    from PIL import Image
+    import numpy as np
+
+    # Create fake brdf_lut.pt with known values
+    import torch
+    fake_lut = torch.zeros(256, 256, 2)
+    fake_lut[:, :, 0] = 0.5   # scale = 0.5 everywhere → R=128
+    fake_lut[:, :, 1] = 0.25  # bias = 0.25 → G=64
+    pt_path = tmp_path / "epoch" / "brdf_lut.pt"
+    pt_path.parent.mkdir(parents=True)
+    torch.save(fake_lut, pt_path)
+    # Also create brdf_lut.png to verify .pt takes precedence
+    (pt_path.parent / "brdf_lut.png").write_bytes(b"fake debug png")
+
+    # Other required files
+    glb_path = tmp_path / "scene.glb"
+    glb_path.write_bytes(b"fake glb")
+    epoch_dir = tmp_path / "epoch"
+    for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
+        (epoch_dir / tex).write_bytes(b"\x89PNG fake")
+    (epoch_dir / "env_map.png").write_bytes(b"\x89PNG fake")
+
+    monkeypatch.setattr(
+        "scripts.package_runtime_asset.extract_glb_submesh_names",
+        lambda p: ["test"],
+    )
+
+    output_zip = tmp_path / "out.zip"
+    package_asset(
+        glb_path=str(glb_path),
+        epoch_dir=epoch_dir,
+        scene_name="test",
+        output_path=output_zip,
+        epoch=100,
+        psnr_db=None,
+    )
+
+    # Read back the generated brdf_lut.png from the zip
+    with zipfile.ZipFile(output_zip) as zf:
+        brdf_png = zf.read("textures/brdf_lut.png")
+        img = Image.open(io.BytesIO(brdf_png))
+        assert img.size == (256, 256), f"Expected 256x256, got {img.size}"
+        arr = np.array(img)
+        # R channel should be ~128 (0.5 * 255 = 127.5)
+        assert abs(arr[:, :, 0].mean() - 128) < 2, f"R mean={arr[:,:,0].mean()}"
+        # G channel should be ~64 (0.25 * 255 = 63.75)
+        assert abs(arr[:, :, 1].mean() - 64) < 2, f"G mean={arr[:,:,1].mean()}"
+
+
 def test_extract_glb_submesh_names_single_mesh_fallback(monkeypatch):
     """extract_glb_submesh_names handles MeshData (non-multi) fallback."""
     import sys
