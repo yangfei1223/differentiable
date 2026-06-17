@@ -20,3 +20,10 @@ build/
 .pytest_cache/
 .opencode/
 .mypy_cache/
+
+# Agent-browser skill (installed but not project code)
+.agents/
+skills-lock.json
+
+# Debug screenshots/analysis scripts
+app/debug/

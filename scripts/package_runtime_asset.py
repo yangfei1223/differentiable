@@ -1,4 +1,4 @@
-"""Pack training output into a Web Viewer-compatible .zip asset bundle.
+﻿"""Pack training output into a Web Viewer-compatible .zip asset bundle.
 
 Usage:
     python -m scripts.package_runtime_asset \
@@ -368,7 +368,7 @@ def main() -> None:
     parser.add_argument("--glb", required=True, help="Path to source .glb file")
     parser.add_argument("--epoch-dir", required=True, help="Training epoch output directory")
     parser.add_argument("--scene-name", required=True, help="Scene name")
-    parser.add_argument("--output", default=None, help="Output .zip path (default: output/{scene}_pbr.zip)")
+    parser.add_argument("--output", default=None, help="Output .zip path (default: export/scenes/{scene}_pbr.zip)")
     parser.add_argument("--epoch", type=int, default=None, help="Training epoch (default: parse from --epoch-dir)")
     parser.add_argument("--psnr", type=float, default=None, help="Training PSNR in dB")
     args = parser.parse_args()
@@ -386,11 +386,11 @@ def main() -> None:
             epoch = 0
 
     # Default output path — subdir scenes/ matches Vite publicDir URL convention
-    output_path = args.output or f"output/scenes/{args.scene_name}_pbr.zip"
+    output_path = args.output or f"export/scenes/{args.scene_name}_pbr.zip"
 
     # Ensure the scenes/ subdirectory exists (package_asset creates parent, but index_path
     # lives at output root; we create scenes/ here for clarity)
-    Path("output/scenes").mkdir(parents=True, exist_ok=True)
+    Path("export/scenes").mkdir(parents=True, exist_ok=True)
 
     # Pack
     created = package_asset(
@@ -405,7 +405,7 @@ def main() -> None:
 
     # scenes_index.json lives at output root (not in scenes/ subdir)
     # so Vite serves it at /scenes_index.json (root URL, matching App.ts fetch)
-    index_path = Path("output") / "scenes_index.json"
+    index_path = Path("export") / "scenes_index.json"
     update_scenes_index(
         index_path=index_path,
         scene_name=args.scene_name,

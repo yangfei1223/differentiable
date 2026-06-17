@@ -1,0 +1,14 @@
+[
+  {
+    "name": "helmet",
+    "file": "/scenes/helmet_pbr.zip",
+    "psnr_db": 20.81,
+    "epoch": 2000
+  },
+  {
+    "name": "piano",
+    "file": "/scenes/piano_pbr.zip",
+    "psnr_db": 28.8,
+    "epoch": 2000
+  }
+]
