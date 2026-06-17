@@ -67,14 +67,15 @@ export class PerfStats {
 
     // Estimate texture memory (RGBA = 4 bytes per pixel)
     let bytes = 0;
+    let hasMipmaps = false;
     for (const tex of this.textures) {
       const img = tex.image as { width?: number; height?: number };
       if (img?.width && img?.height) {
         bytes += img.width * img.height * 4;
-        // Include mipmaps (~1.33x)
-        if (tex.generateMipmaps) bytes = Math.floor(bytes * 1.33);
+        if (tex.generateMipmaps) hasMipmaps = true;
       }
     }
+    if (hasMipmaps) bytes = Math.floor(bytes * 1.33);
     this.texEl.textContent = formatBytes(bytes);
 
     this.frameCount = 0;

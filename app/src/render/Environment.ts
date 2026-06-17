@@ -12,6 +12,8 @@ export class Environment {
   readonly envMap: THREE.Texture;
   /** BRDF LUT texture (RG channels). */
   readonly brdfLut: THREE.Texture;
+  /** Log2 size of the BRDF LUT (square) — used in align_corners UV correction. */
+  readonly brdfLutSize: number;
   /** floor(log2(max(envH, envW))) — max mip level for textureLod. */
   readonly maxEnvMip: number;
   /** Equals maxEnvMip — used as the diffuse irradiance mip bias. */
@@ -20,10 +22,12 @@ export class Environment {
   private constructor(
     envMap: THREE.Texture,
     brdfLut: THREE.Texture,
+    brdfLutSize: number,
     maxEnvMip: number,
   ) {
     this.envMap = envMap;
     this.brdfLut = brdfLut;
+    this.brdfLutSize = brdfLutSize;
     this.maxEnvMip = maxEnvMip;
     this.diffuseMipBias = maxEnvMip;
   }
@@ -38,11 +42,14 @@ export class Environment {
     const envMap = await loadTexture(envMapUrl, THREE.SRGBColorSpace, true);
     const brdfLut = await loadTexture(brdfLutUrl, THREE.LinearSRGBColorSpace, false);
 
+    // Detect BRDF LUT size from the loaded image (assume square)
+    const brdfLutSize = brdfLut.image.width || 256;
+
     // Compute max mip from env map dimensions (after image loads)
     const maxDim = Math.max(envMap.image.width, envMap.image.height);
     const maxEnvMip = Math.floor(Math.log2(maxDim));
 
-    return new Environment(envMap, brdfLut, maxEnvMip);
+    return new Environment(envMap, brdfLut, brdfLutSize, maxEnvMip);
   }
 
   dispose(): void {

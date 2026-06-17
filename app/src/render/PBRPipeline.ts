@@ -47,36 +47,64 @@ export class PBRPipeline {
     // 1. Load env map + BRDF LUT
     this.currentEnv = await Environment.fromUrls(bundle.envMapUrl, bundle.brdfLutUrl);
 
-    // 2. Determine BRDF LUT size from manifest default (256) — could be detected from image
-    const brdfLutSize = 256;
+    // 2. Detect BRDF LUT size from the loaded image
+    const brdfLutSize = this.currentEnv.brdfLutSize;
 
     // 3. Load GLB
     const gltf = await this.gltfLoader.loadAsync(bundle.glbUrl);
 
     // 4. Walk glTF scene, find Mesh primitives, match to submesh manifest entries
-    const allTextures: THREE.Texture[] = [this.currentEnv.envMap, this.currentEnv.brdfLut];
     const pbrMeshes: PBRMesh[] = [];
 
     gltf.scene.updateMatrixWorld(true);
 
-    // Track primitive index per mesh name to disambiguate when match_by needs adjustment
-    const primitivesByName = new Map<string, THREE.Mesh[]>();
+    // Build three lookup maps for the three match_by strategies
+    const byPrimitiveName = new Map<string, THREE.Mesh[]>();
+    const byMaterialName = new Map<string, THREE.Mesh[]>();
+    const byMeshIndex = new Map<number, THREE.Mesh[]>();
 
+    let meshIdx = 0;
     gltf.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
-        const meshName = obj.name || `mesh_${primitivesByName.size}`;
-        if (!primitivesByName.has(meshName)) {
-          primitivesByName.set(meshName, []);
+        // By primitive name (current behavior)
+        const meshName = obj.name || `mesh_${meshIdx}`;
+        if (!byPrimitiveName.has(meshName)) byPrimitiveName.set(meshName, []);
+        byPrimitiveName.get(meshName)!.push(obj);
+
+        // By material name
+        const mat = obj.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
+        const matName = Array.isArray(mat) ? mat[0]?.name : mat?.name;
+        if (matName) {
+          if (!byMaterialName.has(matName)) byMaterialName.set(matName, []);
+          byMaterialName.get(matName)!.push(obj);
         }
-        primitivesByName.get(meshName)!.push(obj);
+
+        // By mesh index (sequential numbering)
+        byMeshIndex.set(meshIdx, [obj]);
+        meshIdx++;
       }
     });
 
     // For each submesh manifest entry, find matching primitive(s)
     for (const submesh of bundle.manifest.submeshes) {
-      const primitives = primitivesByName.get(submesh.name);
+      let primitives: THREE.Mesh[] | undefined;
+      switch (submesh.match_by) {
+        case 'material_name':
+          primitives = byMaterialName.get(submesh.name);
+          break;
+        case 'mesh_index':
+          primitives = byMeshIndex.get(parseInt(submesh.name, 10));
+          if (isNaN(parseInt(submesh.name, 10))) {
+            console.warn(`submesh "${submesh.name}" has match_by=mesh_index but name is not numeric`);
+          }
+          break;
+        case 'primitive_name':
+        default:
+          primitives = byPrimitiveName.get(submesh.name);
+          break;
+      }
       if (!primitives || primitives.length === 0) {
-        console.warn(`No glTF primitive found for submesh "${submesh.name}"`);
+        console.warn(`No glTF primitive found for submesh "${submesh.name}" (match_by=${submesh.match_by})`);
         continue;
       }
       const textureUrls = bundle.submeshTextureUrls[submesh.name];
@@ -93,14 +121,6 @@ export class PBRPipeline {
           brdfLutSize,
         );
         pbrMeshes.push(pbrMesh);
-        // Track material textures for memory accounting
-        const mat = pbrMesh.mesh.material as THREE.ShaderMaterial;
-        allTextures.push(
-          mat.uniforms.uBaseColor.value,
-          mat.uniforms.uRoughness.value,
-          mat.uniforms.uMetallic.value,
-          mat.uniforms.uNormalMap.value,
-        );
       }
     }
 
