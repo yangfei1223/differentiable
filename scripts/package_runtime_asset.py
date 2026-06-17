@@ -315,8 +315,12 @@ def main() -> None:
         else:
             epoch = 0
 
-    # Default output path
-    output_path = args.output or f"output/{args.scene_name}_pbr.zip"
+    # Default output path — subdir scenes/ matches Vite publicDir URL convention
+    output_path = args.output or f"output/scenes/{args.scene_name}_pbr.zip"
+
+    # Ensure the scenes/ subdirectory exists (package_asset creates parent, but index_path
+    # lives at output root; we create scenes/ here for clarity)
+    Path("output/scenes").mkdir(parents=True, exist_ok=True)
 
     # Pack
     created = package_asset(
@@ -329,8 +333,9 @@ def main() -> None:
     )
     print(f"Packed: {created}")
 
-    # Update scenes_index.json in the same directory as the zip
-    index_path = Path(output_path).parent / "scenes_index.json"
+    # scenes_index.json lives at output root (not in scenes/ subdir)
+    # so Vite serves it at /scenes_index.json (root URL, matching App.ts fetch)
+    index_path = Path("output") / "scenes_index.json"
     update_scenes_index(
         index_path=index_path,
         scene_name=args.scene_name,
