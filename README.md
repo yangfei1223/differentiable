@@ -264,6 +264,51 @@ pytest tests/ -v
 - Blender 5.1 (数据制备)
 - trimesh, OpenCV, Pillow, matplotlib
 
+## 更新日志
+
+### v0.4 (2026-06-17) — Neural Lightmap 着色模型
+
+- **NLM 着色模型**：per-submesh 可学习特征图 + 共享 TinyMLP 解码器，Softplus HDR 输出
+- **反射方向编码**：PE(R) 高频位置编码 + NdotV Fresnel 标量，建模视角相关镜面反射
+- **TTUR 双学习率**：特征图 0.1 / MLP 0.001，解决局部梯度 vs 全局梯度的更新速度差异
+- **掩码索引前向**：仅有效像素过 MLP，节省 ~80% 背景算力
+- **GLB 加载统一**：单 mesh 也走 gltf_loader 路径（包装为 1-submesh MultiMeshData），消除 single/multi 分歧
+- **glTF 四元数修复**：`[w,x,y,z]` → `[x,y,z,w]`（glTF 规范），修复根节点 rotation 错误导致的几何错位
+- **结果**：头盔 22.01 dB（+1.2 vs PBR），钢琴 28.08 dB（-0.43 vs PBR）
+- **遗留**：大参数配置下渲染颗粒感（联合优化非唯一性）+ PSNR 后期震荡
+
+### v0.3.1 (2026-06-09) — PBR 视频修复
+
+- 修复分量视频渲染（不再覆盖材质，直接从 debug_info 提取 diffuse/specular）
+- README 加入环绕视频链接
+
+### v0.3 (2026-06-08) — Split-Sum PBR 管线
+
+- **PBR split-sum 近似**：diffuse irradiance + prefiltered specular + BRDF LUT (Karis 2014)
+- **8ch PBR 材质贴图**：base_color + roughness + metallic + normal，sigmoid 约束
+- **HDR 环境贴图**：Equirect 参数化，softplus 解码，nvdiffrast mipmap
+- **GGX BRDF LUT**：全 PyTorch 向量化 importance sampling
+- **法线贴图冻结**：消除法线优化噪声导致的"水渍"高光伪影
+- **多 mesh 支持**：逐 submesh 梯度累积，depth-based 合成
+- **结果**：头盔 20.81 dB，钢琴 28.80 dB
+
+### v0.2 (2026-06-05) — 3DGS 风格 SH 参数化
+
+- **DC/高阶分离存储**：独立学习率（高阶 lr = DC lr × rest_lr_ratio）
+- **动态 SH Order**：支持 order 0 / 1 / 2
+- **调试可视化**：2×2 compare atlas (GT/Full/DC/HF) + 多视频
+- **数据集管理**：按 `{scene}_{yymmdd}` 目录组织
+- **UV 修正**：glTF 模型 V 坐标 [-1,0] 自动映射到 [0,1]
+- **视频自动相机**：根据 mesh bbox 自适应计算参数
+
+### v0.1 (2026-06-04) — MVP
+
+- 可微烘焙管线 MVP：SH order 0/2
+- nvdiffrast 可微光栅化 + UV 采样
+- Coarse-to-Fine 多分辨率渐进训练
+- UV Seam Padding 自动膨胀
+- Fibonnaci 半球采样相机生成 + Cycles GT 渲染
+
 ## License
 
 Private
