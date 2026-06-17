@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.log
 .DS_Store
+# Lockfile pinned by app's own minor version; commit if reproducibility across machines matters
+package-lock.json
