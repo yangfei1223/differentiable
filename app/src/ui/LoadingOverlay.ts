@@ -1,69 +1,65 @@
-/** Loading spinner overlay with status text. */
+/**
+ * Loading spinner overlay with status text and fade-out transition.
+ */
 export class LoadingOverlay {
   private readonly element: HTMLDivElement;
   private readonly statusEl: HTMLDivElement;
+  private errorTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(parent: HTMLElement) {
     this.element = document.createElement('div');
-    this.element.style.cssText = `
-      position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.7);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      z-index: 100;
-    `;
-    parent.appendChild(this.element);
+    this.element.className = 'viewer-loading viewer-loading--hidden';
 
     const spinner = document.createElement('div');
-    spinner.style.cssText = `
-      width: 40px;
-      height: 40px;
-      border: 3px solid rgba(255, 255, 255, 0.2);
-      border-top-color: #00ff88;
-      border-radius: 50%;
-      animation: ps-spin 0.8s linear infinite;
-    `;
+    spinner.className = 'viewer-loading-spinner';
     this.element.appendChild(spinner);
 
     this.statusEl = document.createElement('div');
-    this.statusEl.style.cssText = `margin-top: 14px; font-size: 13px; opacity: 0.85;`;
+    this.statusEl.className = 'viewer-loading-text';
     this.statusEl.textContent = 'Loading...';
     this.element.appendChild(this.statusEl);
 
-    // Inject keyframes if not already present
-    if (!document.getElementById('ps-spin-keyframes')) {
-      const style = document.createElement('style');
-      style.id = 'ps-spin-keyframes';
-      style.textContent = `@keyframes ps-spin { to { transform: rotate(360deg); } }`;
-      document.head.appendChild(style);
-    }
+    parent.appendChild(this.element);
   }
 
   setStatus(text: string): void {
     this.statusEl.textContent = text;
+    this.statusEl.style.color = '';
   }
 
   show(): void {
-    this.element.style.display = 'flex';
+    if (this.errorTimer) {
+      clearTimeout(this.errorTimer);
+      this.errorTimer = null;
+    }
+    this.element.classList.remove('viewer-loading--hidden', 'viewer-loading--error');
+    this.statusEl.style.color = '';
   }
 
   hide(): void {
-    this.element.style.display = 'none';
+    // Fade out via CSS transition
+    this.element.classList.add('viewer-loading--hidden');
   }
 
   showError(message: string): void {
+    this.element.classList.remove('viewer-loading--hidden');
+    this.element.classList.add('viewer-loading--error');
     this.statusEl.textContent = `Error: ${message}`;
-    this.statusEl.style.color = '#ff6b6b';
+    this.statusEl.style.color = 'var(--error)';
+
     // Auto-hide after 5 seconds
-    setTimeout(() => this.hide(), 5000);
+    this.errorTimer = setTimeout(() => {
+      this.element.classList.add('viewer-loading--hidden');
+      // Remove error styling after transition completes
+      setTimeout(() => {
+        this.element.classList.remove('viewer-loading--error');
+        this.statusEl.style.color = '';
+      }, 400);
+    }, 5000);
   }
 
   dispose(): void {
+    if (this.errorTimer) clearTimeout(this.errorTimer);
     this.element.remove();
   }
 }

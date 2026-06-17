@@ -18,32 +18,21 @@ export class PerfStats {
 
   constructor(parent: HTMLElement) {
     this.element = document.createElement('div');
-    this.element.style.cssText = `
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      padding: 10px 14px;
-      background: rgba(0, 0, 0, 0.55);
-      color: #00ff88;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 12px;
-      border-radius: 6px;
-      pointer-events: none;
-      z-index: 10;
-      line-height: 1.6;
-    `;
-    parent.appendChild(this.element);
+    this.element.className = 'viewer-perf-stats';
 
     this.element.innerHTML = `
-      <div>FPS: <span id="ps-fps">--</span></div>
-      <div>Draw: <span id="ps-draw">--</span></div>
-      <div>Tris: <span id="ps-tris">--</span></div>
-      <div>Tex: <span id="ps-tex">--</span></div>
+      <div class="viewer-perf-title">Performance</div>
+      <div class="viewer-perf-row"><span class="viewer-perf-label">FPS</span><span class="viewer-perf-value" id="ps-fps">--</span></div>
+      <div class="viewer-perf-row"><span class="viewer-perf-label">Draw</span><span class="viewer-perf-value" id="ps-draw">--</span></div>
+      <div class="viewer-perf-row"><span class="viewer-perf-label">Tris</span><span class="viewer-perf-value" id="ps-tris">--</span></div>
+      <div class="viewer-perf-row"><span class="viewer-perf-label">Tex</span><span class="viewer-perf-value" id="ps-tex">--</span></div>
     `;
     this.fpsEl = this.element.querySelector('#ps-fps')!;
     this.drawEl = this.element.querySelector('#ps-draw')!;
     this.trisEl = this.element.querySelector('#ps-tris')!;
     this.texEl = this.element.querySelector('#ps-tex')!;
+
+    parent.appendChild(this.element);
   }
 
   /** Register textures to track memory usage. */

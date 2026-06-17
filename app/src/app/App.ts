@@ -52,9 +52,10 @@ export class App {
     // Load preset scene index
     this.scenePicker.loadSceneIndex('/scenes_index.json').then(() => {
       // Auto-select first scene if available
-      const first = this.scenePicker.sceneList;
-      if (first && first.length > 0 && first[0].file) {
-        this.loadScene(first[0].file);
+      const scenes = this.scenePicker.sceneList;
+      if (scenes && scenes.length > 0 && scenes[0].file) {
+        this.scenePicker.selectSceneByUrl(scenes[0].file);
+        this.loadScene(scenes[0].file);
       } else {
         this.loading.setStatus('Drop a .zip to begin');
       }
