@@ -284,3 +284,58 @@ def update_scenes_index(
         data.append(entry)
 
     index_path.write_text(json.dumps(data, indent=2))
+
+
+def main() -> None:
+    """CLI entry point: pack a training output into a .zip bundle."""
+    parser = argparse.ArgumentParser(
+        description="Pack PBR training output into a Web Viewer .zip bundle."
+    )
+    parser.add_argument("--glb", required=True, help="Path to source .glb file")
+    parser.add_argument("--epoch-dir", required=True, help="Training epoch output directory")
+    parser.add_argument("--scene-name", required=True, help="Scene name")
+    parser.add_argument("--output", default=None, help="Output .zip path (default: output/{scene}_pbr.zip)")
+    parser.add_argument("--epoch", type=int, default=None, help="Training epoch (default: parse from --epoch-dir)")
+    parser.add_argument("--psnr", type=float, default=None, help="Training PSNR in dB")
+    args = parser.parse_args()
+
+    # Default epoch: parse from directory name (e.g. "epoch2000" → 2000)
+    epoch = args.epoch
+    if epoch is None:
+        dir_name = Path(args.epoch_dir).name
+        if dir_name.startswith("epoch"):
+            try:
+                epoch = int(dir_name[5:])
+            except ValueError:
+                epoch = 0
+        else:
+            epoch = 0
+
+    # Default output path
+    output_path = args.output or f"output/{args.scene_name}_pbr.zip"
+
+    # Pack
+    created = package_asset(
+        glb_path=args.glb,
+        epoch_dir=Path(args.epoch_dir),
+        scene_name=args.scene_name,
+        output_path=Path(output_path),
+        epoch=epoch,
+        psnr_db=args.psnr,
+    )
+    print(f"Packed: {created}")
+
+    # Update scenes_index.json in the same directory as the zip
+    index_path = Path(output_path).parent / "scenes_index.json"
+    update_scenes_index(
+        index_path=index_path,
+        scene_name=args.scene_name,
+        zip_filename=Path(output_path).name,
+        psnr_db=args.psnr,
+        epoch=epoch,
+    )
+    print(f"Updated: {index_path}")
+
+
+if __name__ == "__main__":
+    main()
