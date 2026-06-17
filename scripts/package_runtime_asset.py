@@ -77,3 +77,66 @@ def build_manifest(
             for sm in submeshes
         ],
     }
+
+
+def discover_submeshes(
+    epoch_dir: Path,
+    scene_name: str,
+    glb_submesh_names: list[str],
+) -> list[dict]:
+    """Discover submesh texture directories and build submesh manifest entries.
+
+    Two layouts supported:
+      1. Single-mesh: textures directly in epoch_dir/
+         → 1 submesh named scene_name (or first glb_submesh_names entry)
+      2. Multi-mesh: textures in epoch_dir/Object_N/ subdirs
+         → 1 submesh per subdirectory, matched by index to glb_submesh_names
+
+    Args:
+        epoch_dir: Directory containing exported PBR textures.
+        scene_name: Scene name (used for single-mesh case).
+        glb_submesh_names: Ordered list of submesh names extracted from GLB.
+
+    Returns:
+        List of submesh manifest entries.
+
+    Raises:
+        FileNotFoundError: If a required texture is missing.
+        ValueError: If subdirectory count doesn't match GLB primitive count.
+    """
+    # Detect multi-mesh: any Object_N subdirectory exists
+    sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
+
+    if not sub_dirs:
+        # Single-mesh layout
+        name = glb_submesh_names[0] if glb_submesh_names else scene_name
+        return [_build_submesh_entry(name, epoch_dir, textures_prefix=f"textures/{name}")]
+
+    # Multi-mesh layout
+    if len(sub_dirs) != len(glb_submesh_names):
+        raise ValueError(
+            f"Subdir count {len(sub_dirs)} does not match GLB primitive count "
+            f"{len(glb_submesh_names)}"
+        )
+
+    entries = []
+    for sub_dir, glb_name in zip(sub_dirs, glb_submesh_names):
+        entries.append(
+            _build_submesh_entry(glb_name, sub_dir, textures_prefix=f"textures/{glb_name}")
+        )
+    return entries
+
+
+def _build_submesh_entry(name: str, tex_dir: Path, textures_prefix: str) -> dict:
+    """Validate textures exist and build a single submesh manifest entry."""
+    textures = {}
+    for tex_name in REQUIRED_SUBMESH_TEXTURES:
+        tex_file = tex_dir / f"{tex_name}.png"
+        if not tex_file.exists():
+            raise FileNotFoundError(f"Missing required texture: {tex_file}")
+        textures[tex_name] = f"{textures_prefix}/{tex_name}.png"
+    return {
+        "name": name,
+        "match_by": "primitive_name",
+        "textures": textures,
+    }
