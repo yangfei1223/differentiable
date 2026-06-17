@@ -22,3 +22,46 @@ export function directionToUV(dir: [number, number, number]): [number, number] {
   const v = Math.asin(yClamped) / PI + 0.5;
   return [u, v];
 }
+
+export interface DecodedMaterial {
+  baseColor: [number, number, number]; // linear
+  roughness: number;
+  metallic: number;
+  normalTS: [number, number, number]; // unit vector
+}
+
+export interface MaterialTextureInput {
+  baseColorSRGB: [number, number, number];
+  roughness: number;
+  metallic: number;
+  normalMap: [number, number, number]; // [0,1] range
+}
+
+/**
+ * Decode 4-channel material texture samples.
+ * Mirrors GLSL: shaders/pbr.frag → step 1 (Material decode)
+ * Mirrors Python: src/shading/pbr/material.py → decode_material
+ *
+ * Note: Python's training stores raw texture as sigmoid-encoded; the exported
+ * PNGs are already in display space (base_color=sRGB, roughness/metallic=linear).
+ * So we only apply pow(2.2) to base_color here.
+ */
+export function decodeMaterial(input: MaterialTextureInput): DecodedMaterial {
+  const [r, g, b] = input.baseColorSRGB;
+  const baseColor: [number, number, number] = [
+    Math.pow(r, 2.2),
+    Math.pow(g, 2.2),
+    Math.pow(b, 2.2),
+  ];
+  const roughness = input.roughness;
+  const metallic = input.metallic;
+
+  // Remap [0,1] → [-1,1], then normalize (mirror F.normalize)
+  const nx = input.normalMap[0] * 2 - 1;
+  const ny = input.normalMap[1] * 2 - 1;
+  const nz = input.normalMap[2] * 2 - 1;
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+  const normalTS: [number, number, number] = [nx / len, ny / len, nz / len];
+
+  return { baseColor, roughness, metallic, normalTS };
+}
