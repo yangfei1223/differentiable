@@ -309,6 +309,24 @@ pytest tests/ -v
 - UV Seam Padding 自动膨胀
 - Fibonnaci 半球采样相机生成 + Cycles GT 渲染
 
+## Web Viewer (Runtime Validation)
+
+A WebGL2 viewer is available in `app/` for validating PBR baking outputs in a browser environment. It loads asset bundles produced by `scripts/package_runtime_asset.py` and renders them with GLSL shaders that strictly mirror the training-time PBR math.
+
+```bash
+# Pack a training output
+python -m scripts.package_runtime_asset \
+  --glb data/helmet_260604/scene/lowpoly.glb \
+  --epoch-dir output/helmet_260604_pbr/epoch2000 \
+  --scene-name helmet \
+  --psnr 20.81
+
+# Run the viewer
+cd app && npm install && npm run dev
+```
+
+See `app/README.md` for details.
+
 ## License
 
 Private
