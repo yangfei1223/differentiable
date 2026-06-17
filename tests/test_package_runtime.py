@@ -59,12 +59,16 @@ def test_discover_submeshes_single(tmp_path):
 
 
 def test_discover_submeshes_multi(tmp_path):
-    """Multi-mesh training output has Object_*/ subdirectories."""
+    """Multi-mesh training output has Object_*/ subdirectories matched by name."""
+    import sys
+    from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.package_runtime_asset import discover_submeshes
 
     epoch_dir = tmp_path / "epoch"
-    for sub in ("Object_0", "Object_1"):
+    # Use realistic submesh names matching both filesystem dir names and GLB names
+    glb_names = ["Object_0", "Object_1"]
+    for sub in glb_names:
         sub_dir = epoch_dir / sub
         sub_dir.mkdir(parents=True)
         for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
@@ -73,14 +77,14 @@ def test_discover_submeshes_multi(tmp_path):
     submeshes = discover_submeshes(
         epoch_dir,
         scene_name="piano",
-        glb_submesh_names=["mesh_0", "mesh_1"],
+        glb_submesh_names=glb_names,
     )
 
     assert len(submeshes) == 2
-    # Submesh order matches GLB primitive order; names from glb_submesh_names
-    assert submeshes[0]["name"] == "mesh_0"
-    assert submeshes[0]["textures"]["base_color"] == "textures/mesh_0/base_color.png"
-    assert submeshes[1]["name"] == "mesh_1"
+    # Submesh order follows GLB order; names match input
+    assert submeshes[0]["name"] == "Object_0"
+    assert submeshes[0]["textures"]["base_color"] == "textures/Object_0/base_color.png"
+    assert submeshes[1]["name"] == "Object_1"
 
 
 def test_extract_glb_submesh_names_uses_gltf_loader(tmp_path, monkeypatch):
@@ -192,21 +196,21 @@ def test_update_scenes_index_appends_entry(tmp_path):
     assert helmet["psnr_db"] == 21.0
 
 
-def test_discover_submeshes_mismatch_raises(tmp_path):
-    """Multi-mesh subdir count must match GLB primitive count."""
+def test_discover_submeshes_missing_dir_raises(tmp_path):
+    """Raises when a GLB submesh name has no matching filesystem dir."""
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.package_runtime_asset import discover_submeshes
 
     epoch_dir = tmp_path / "epoch"
+    # Only create Object_0, but GLB claims two submeshes
     (epoch_dir / "Object_0").mkdir(parents=True)
-    # Need 4 fake textures in Object_0 so _build_submesh_entry doesn't fail first
     for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
         (epoch_dir / "Object_0" / tex).write_bytes(b"\x89PNG fake")
 
-    with pytest.raises(ValueError, match="Subdir count"):
-        discover_submeshes(epoch_dir, "test", ["mesh_0", "mesh_1"])
+    with pytest.raises(ValueError, match="not found in epoch_dir"):
+        discover_submeshes(epoch_dir, "test", ["Object_0", "Object_1"])
 
 
 def test_discover_submeshes_empty_glb_names(tmp_path):
@@ -311,3 +315,71 @@ def test_extract_glb_submesh_names_no_name_uses_default(monkeypatch):
 
     names = extract_glb_submesh_names("dummy.glb")
     assert names == ["mesh_0"]
+
+
+def test_discover_submeshes_non_numerical_order(tmp_path):
+    """GLB submesh order may differ from filesystem alphabetical order.
+
+    Regression test for piano scene where gltf_loader returns:
+      ['Object_0', 'Object_5', 'Object_1', 'Object_2', 'Object_3', 'Object_4']
+    but filesystem dirs are alphabetical. Matching must be by NAME, not by position.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import discover_submeshes, package_asset
+    import zipfile
+    import json
+
+    epoch_dir = tmp_path / "epoch"
+    glb_names = ["Object_0", "Object_5", "Object_1", "Object_2", "Object_3", "Object_4"]
+    for name in glb_names:
+        sub_dir = epoch_dir / name
+        sub_dir.mkdir(parents=True)
+        # Use distinct fake bytes per submesh so we can verify mapping
+        for tex in ("base_color.png", "roughness.png", "metallic.png", "normal_map.png"):
+            (sub_dir / tex).write_bytes(f"{name}_{tex}".encode())
+
+    submeshes = discover_submeshes(epoch_dir, "piano", glb_names)
+
+    # Verify all 6 submeshes discovered
+    assert len(submeshes) == 6
+    # Verify names match GLB order
+    assert [s["name"] for s in submeshes] == glb_names
+    # Verify textures paths use the submesh name (not a positional index)
+    for sm in submeshes:
+        name = sm["name"]
+        assert sm["textures"]["base_color"] == f"textures/{name}/base_color.png"
+
+    # End-to-end: package and verify texture content matches name
+    glb_path = tmp_path / "scene.glb"
+    glb_path.write_bytes(b"fake glb")
+    (epoch_dir / "env_map.png").write_bytes(b"\x89PNG fake env")
+    (epoch_dir / "brdf_lut.png").write_bytes(b"\x89PNG fake brdf")
+    output_zip = tmp_path / "out.zip"
+
+    import scripts.package_runtime_asset as pra
+    # Bypass GLB extraction (we don't have a real GLB)
+    orig_extract = pra.extract_glb_submesh_names
+    pra.extract_glb_submesh_names = lambda p: glb_names
+    try:
+        package_asset(
+            glb_path=str(glb_path),
+            epoch_dir=epoch_dir,
+            scene_name="piano",
+            output_path=output_zip,
+            epoch=2000,
+            psnr_db=28.0,
+        )
+    finally:
+        pra.extract_glb_submesh_names = orig_extract
+
+    # Verify zip contents: texture bytes match submesh name
+    with zipfile.ZipFile(output_zip) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        assert [s["name"] for s in manifest["submeshes"]] == glb_names
+        for name in glb_names:
+            content = zf.read(f"textures/{name}/base_color.png").decode()
+            assert content == f"{name}_base_color.png", (
+                f"Wrong texture mapping for {name}: got '{content}'"
+            )

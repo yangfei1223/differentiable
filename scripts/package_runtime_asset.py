@@ -88,8 +88,8 @@ def discover_submeshes(
     Two layouts supported:
       1. Single-mesh: textures directly in epoch_dir/
          → 1 submesh named scene_name (or first glb_submesh_names entry)
-      2. Multi-mesh: textures in epoch_dir/Object_N/ subdirs
-         → 1 submesh per subdirectory, matched by index to glb_submesh_names
+      2. Multi-mesh: textures in epoch_dir/<glb_name>/ subdirs
+         → 1 submesh per GLB submesh name, matched by NAME not position.
 
     Args:
         epoch_dir: Directory containing exported PBR textures.
@@ -101,7 +101,7 @@ def discover_submeshes(
 
     Raises:
         FileNotFoundError: If a required texture is missing.
-        ValueError: If subdirectory count doesn't match GLB primitive count.
+        ValueError: If a GLB submesh name has no matching filesystem directory.
     """
     # Detect multi-mesh: any Object_N subdirectory exists
     sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
@@ -111,18 +111,26 @@ def discover_submeshes(
         name = glb_submesh_names[0] if glb_submesh_names else scene_name
         return [_build_submesh_entry(name, epoch_dir, textures_prefix=f"textures/{name}")]
 
-    # Multi-mesh layout
-    if len(sub_dirs) != len(glb_submesh_names):
-        raise ValueError(
-            f"Subdir count {len(sub_dirs)} does not match GLB primitive count "
-            f"{len(glb_submesh_names)}"
-        )
-
+    # Multi-mesh layout: match by NAME, not by position
     entries = []
-    for sub_dir, glb_name in zip(sub_dirs, glb_submesh_names):
+    missing_dirs = []
+    for glb_name in glb_submesh_names:
+        sub_dir = epoch_dir / glb_name
+        if not sub_dir.exists():
+            missing_dirs.append(glb_name)
+            continue
         entries.append(
             _build_submesh_entry(glb_name, sub_dir, textures_prefix=f"textures/{glb_name}")
         )
+
+    if missing_dirs:
+        actual_dirs = sorted([d.name for d in epoch_dir.iterdir() if d.is_dir()])
+        raise ValueError(
+            f"GLB submesh names {missing_dirs} not found in epoch_dir. "
+            f"Available subdirs: {actual_dirs}. "
+            f"GLB names must match training-time submesh names (which become filesystem dir names)."
+        )
+
     return entries
 
 
@@ -224,10 +232,15 @@ def package_asset(
         zf.write(brdf_lut_file, "textures/brdf_lut.png")
 
         # Per-submesh textures
-        sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
-        for i, sub in enumerate(submeshes):
+        # Detect layout: any subdirectory matching a submesh name → multi-mesh
+        sub_dirs_exist = any((epoch_dir / sub["name"]).is_dir() for sub in submeshes)
+
+        for sub in submeshes:
             sub_name = sub["name"]
-            src_dir = sub_dirs[i] if sub_dirs else epoch_dir
+            if sub_dirs_exist:
+                src_dir = epoch_dir / sub_name  # name-based lookup
+            else:
+                src_dir = epoch_dir  # single-mesh fallback (flat layout)
 
             for tex_name in REQUIRED_SUBMESH_TEXTURES:
                 src = src_dir / f"{tex_name}.png"
