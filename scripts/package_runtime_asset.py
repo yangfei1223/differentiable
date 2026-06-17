@@ -162,3 +162,125 @@ def extract_glb_submesh_names(glb_path: str) -> list[str]:
         return [s.name for s in mesh.submeshes]
     # Single MeshData — use the mesh's name or fall back to "mesh_0"
     return [getattr(mesh, "name", None) or "mesh_0"]
+
+
+def package_asset(
+    glb_path: str,
+    epoch_dir: Path,
+    scene_name: str,
+    output_path: Path,
+    epoch: int,
+    psnr_db: float | None = None,
+) -> Path:
+    """Pack a training output directory into a .zip asset bundle.
+
+    Args:
+        glb_path: Path to source GLB file.
+        epoch_dir: Directory containing exported PBR textures.
+        scene_name: Scene identifier.
+        output_path: Output .zip path (will create parent dirs).
+        epoch: Training epoch.
+        psnr_db: Optional training PSNR.
+
+    Returns:
+        Path to the created .zip file.
+    """
+    epoch_dir = Path(epoch_dir)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Extract submesh names from GLB
+    glb_submesh_names = extract_glb_submesh_names(glb_path)
+
+    # Discover texture submeshes
+    submeshes = discover_submeshes(epoch_dir, scene_name, glb_submesh_names)
+
+    # Validate env_map + brdf_lut at top level
+    env_map_file = epoch_dir / "env_map.png"
+    brdf_lut_file = epoch_dir / "brdf_lut.png"
+    if not env_map_file.exists():
+        raise FileNotFoundError(f"Missing env_map.png: {env_map_file}")
+    if not brdf_lut_file.exists():
+        raise FileNotFoundError(f"Missing brdf_lut.png: {brdf_lut_file}")
+
+    # Build manifest
+    manifest = build_manifest(
+        scene_name=scene_name,
+        glb_path="geometry/scene.glb",
+        submeshes=submeshes,
+        env_map_path="textures/env_map.png",
+        brdf_lut_path="textures/brdf_lut.png",
+        epoch=epoch,
+        psnr_db=psnr_db,
+    )
+
+    # Build the zip
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Manifest
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+        # Geometry
+        zf.write(glb_path, "geometry/scene.glb")
+
+        # Env map + BRDF LUT
+        zf.write(env_map_file, "textures/env_map.png")
+        zf.write(brdf_lut_file, "textures/brdf_lut.png")
+
+        # Per-submesh textures
+        for sub in submeshes:
+            sub_name = sub["name"]
+            # Find source directory
+            sub_dirs = sorted([d for d in epoch_dir.iterdir() if d.is_dir() and d.name.startswith("Object_")])
+            if sub_dirs:
+                # Multi-mesh: index matches
+                idx = [s["name"] for s in submeshes].index(sub_name)
+                src_dir = sub_dirs[idx]
+            else:
+                src_dir = epoch_dir
+
+            for tex_name in REQUIRED_SUBMESH_TEXTURES:
+                src = src_dir / f"{tex_name}.png"
+                dst = f"textures/{sub_name}/{tex_name}.png"
+                zf.write(src, dst)
+
+    return output_path
+
+
+def update_scenes_index(
+    index_path: Path,
+    scene_name: str,
+    zip_filename: str,
+    psnr_db: float | None,
+    epoch: int,
+) -> None:
+    """Add or update an entry in scenes_index.json.
+
+    Args:
+        index_path: Path to scenes_index.json (created if missing).
+        scene_name: Scene name.
+        zip_filename: Filename only (e.g. "helmet_pbr.zip").
+        psnr_db: Training PSNR.
+        epoch: Training epoch.
+    """
+    index_path = Path(index_path)
+    if index_path.exists():
+        data = json.loads(index_path.read_text())
+    else:
+        data = []
+
+    entry = {
+        "name": scene_name,
+        "file": f"/scenes/{zip_filename}",
+        "psnr_db": psnr_db,
+        "epoch": epoch,
+    }
+
+    # Replace existing entry with same name, or append
+    for i, e in enumerate(data):
+        if e["name"] == scene_name:
+            data[i] = entry
+            break
+    else:
+        data.append(entry)
+
+    index_path.write_text(json.dumps(data, indent=2))
