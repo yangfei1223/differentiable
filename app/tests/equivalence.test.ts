@@ -29,12 +29,12 @@ describe('direction_to_uv', () => {
 
   it('maps (0,-1,0) to near bottom center', () => {
     // y clamped to -0.999
-    const [u, v] = directionToUV([0, -1, 0]);
+    const [, v] = directionToUV([0, -1, 0]);
     expect(v).toBeCloseTo(0.014236437406239644, 5);
   });
 
   it('clamps extreme y values', () => {
-    const [u, v] = directionToUV([0, 1.5, 0]);
+    const [, v] = directionToUV([0, 1.5, 0]);
     expect(v).toBeCloseTo(0.9857635625937604, 5);
   });
 });
@@ -128,14 +128,11 @@ describe('brdf_lut align_corners fix', () => {
 import { splitSumShade } from '../src/math/pbr_math';
 
 describe('split_sum composition', () => {
-  const F0_dielectric = 0.04;
-
   it('pure diffuse (metallic=0, roughness=1) — specular ≈ 0', () => {
     const result = splitSumShade({
       baseColor: [0.8, 0.8, 0.8],
       roughness: 1.0,
       metallic: 0.0,
-      NdotV: 0.9,
       brdfLutScale: 0.0, // at high roughness, scale (F0 multiplier) is small
       brdfLutBias: 0.0,
       irradiance: [1.0, 1.0, 1.0],
@@ -152,7 +149,6 @@ describe('split_sum composition', () => {
       baseColor: [0.95, 0.6, 0.3], // gold-ish
       roughness: 0.1,
       metallic: 1.0,
-      NdotV: 0.9,
       brdfLutScale: 0.8,
       brdfLutBias: 0.05,
       irradiance: [1.0, 1.0, 1.0],
@@ -170,7 +166,6 @@ describe('split_sum composition', () => {
       baseColor: [2.0, 2.0, 2.0],
       roughness: 0.0,
       metallic: 1.0,
-      NdotV: 1.0,
       brdfLutScale: 1.0,
       brdfLutBias: 1.0,
       irradiance: [10, 10, 10],

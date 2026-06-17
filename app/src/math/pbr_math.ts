@@ -90,7 +90,6 @@ export interface SplitSumInput {
   baseColor: [number, number, number];
   roughness: number;
   metallic: number;
-  NdotV: number;
   brdfLutScale: number; // RG.R of BRDF LUT
   brdfLutBias: number;  // RG.G of BRDF LUT
   irradiance: [number, number, number];
@@ -103,7 +102,7 @@ export interface SplitSumInput {
  * Mirrors Python: src/shading/pbr_model.py:91-107 (shade_submesh)
  */
 export function splitSumShade(input: SplitSumInput): [number, number, number] {
-  const { baseColor, metallic, NdotV, brdfLutScale, brdfLutBias, irradiance, prefiltered } = input;
+  const { baseColor, metallic, brdfLutScale, brdfLutBias, irradiance, prefiltered } = input;
 
   // F0 = mix(0.04, baseColor, metallic)
   const F0: [number, number, number] = [
