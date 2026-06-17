@@ -65,3 +65,23 @@ export function decodeMaterial(input: MaterialTextureInput): DecodedMaterial {
 
   return { baseColor, roughness, metallic, normalTS };
 }
+
+/**
+ * Convert [0,1] UV to align_corners=True compatible UV for WebGL textures.
+ *
+ * Python's grid_sample uses align_corners=True (extents map to texel centers).
+ * WebGL's texture() uses align_corners=False (extents map to texel edges).
+ *
+ * To get equivalent sampling, transform: uv → (uv * (size-1) + 0.5) / size.
+ *
+ * Mirrors GLSL: shaders/pbr.frag → step 5 (BRDF LUT UV fix)
+ */
+export function brdfLutUVAlignCorners(
+  u: number,
+  v: number,
+  size: number,
+): [number, number] {
+  const uFixed = (u * (size - 1) + 0.5) / size;
+  const vFixed = (v * (size - 1) + 0.5) / size;
+  return [uFixed, vFixed];
+}

@@ -90,4 +90,39 @@ describe('decode_material', () => {
     expect(m.normalTS[2]).toBeCloseTo(1, 5);
   });
 });
+import { brdfLutUVAlignCorners } from '../src/math/pbr_math';
+
+describe('brdf_lut align_corners fix', () => {
+  // Python uses grid_sample(align_corners=True).
+  // WebGL texture() uses align_corners=False.
+  // Fix: uv_fixed = (uv * (size - 1) + 0.5) / size
+
+  it('at uv=(0,0) with size=256 maps to center of first texel', () => {
+    const [u, v] = brdfLutUVAlignCorners(0, 0, 256);
+    expect(u).toBeCloseTo(0.5 / 256, 5);
+    expect(v).toBeCloseTo(0.5 / 256, 5);
+  });
+
+  it('at uv=(1,1) with size=256 maps to center of last texel', () => {
+    const [u, v] = brdfLutUVAlignCorners(1, 1, 256);
+    expect(u).toBeCloseTo(255.5 / 256, 5);
+    expect(v).toBeCloseTo(255.5 / 256, 5);
+  });
+
+  it('at uv=(0.5,0.5) with size=256 maps to middle of texture', () => {
+    const [u, v] = brdfLutUVAlignCorners(0.5, 0.5, 256);
+    expect(u).toBeCloseTo(128.0 / 256, 5);
+    expect(v).toBeCloseTo(128.0 / 256, 5);
+  });
+
+  it('preserves input range [0,1]', () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const [u, v] = brdfLutUVAlignCorners(t, t, 256);
+      expect(u).toBeGreaterThanOrEqual(0);
+      expect(u).toBeLessThanOrEqual(1);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
+});
 
