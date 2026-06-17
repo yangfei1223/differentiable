@@ -125,4 +125,60 @@ describe('brdf_lut align_corners fix', () => {
     }
   });
 });
+import { splitSumShade } from '../src/math/pbr_math';
+
+describe('split_sum composition', () => {
+  const F0_dielectric = 0.04;
+
+  it('pure diffuse (metallic=0, roughness=1) — specular ≈ 0', () => {
+    const result = splitSumShade({
+      baseColor: [0.8, 0.8, 0.8],
+      roughness: 1.0,
+      metallic: 0.0,
+      NdotV: 0.9,
+      brdfLutScale: 0.0, // at high roughness, scale (F0 multiplier) is small
+      brdfLutBias: 0.0,
+      irradiance: [1.0, 1.0, 1.0],
+      prefiltered: [0.0, 0.0, 0.0], // high roughness → very blurred env
+    });
+    // diffuse = (1-0)*(1-0.04) * 0.8 * 1.0 = 0.768
+    expect(result[0]).toBeCloseTo(0.768, 3);
+    expect(result[1]).toBeCloseTo(0.768, 3);
+    expect(result[2]).toBeCloseTo(0.768, 3);
+  });
+
+  it('pure metal (metallic=1) — diffuse ≈ 0, specular dominates', () => {
+    const result = splitSumShade({
+      baseColor: [0.95, 0.6, 0.3], // gold-ish
+      roughness: 0.1,
+      metallic: 1.0,
+      NdotV: 0.9,
+      brdfLutScale: 0.8,
+      brdfLutBias: 0.05,
+      irradiance: [1.0, 1.0, 1.0],
+      prefiltered: [0.9, 0.9, 0.9],
+    });
+    // F0 = mix(0.04, baseColor, 1.0) = baseColor
+    // kd = (1-1)*(1-F0) = 0 → diffuse = 0
+    // specular = (F0 * 0.8 + 0.05) * prefiltered = (0.76 + 0.05 + ...) * 0.9
+    expect(result[0]).toBeGreaterThan(result[1]); // red dominant
+    expect(result[1]).toBeGreaterThan(result[2]);
+  });
+
+  it('clamps output to [0,1]', () => {
+    const result = splitSumShade({
+      baseColor: [2.0, 2.0, 2.0],
+      roughness: 0.0,
+      metallic: 1.0,
+      NdotV: 1.0,
+      brdfLutScale: 1.0,
+      brdfLutBias: 1.0,
+      irradiance: [10, 10, 10],
+      prefiltered: [10, 10, 10],
+    });
+    expect(result[0]).toBeLessThanOrEqual(1.0);
+    expect(result[1]).toBeLessThanOrEqual(1.0);
+    expect(result[2]).toBeLessThanOrEqual(1.0);
+  });
+});
 

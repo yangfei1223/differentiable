@@ -85,3 +85,52 @@ export function brdfLutUVAlignCorners(
   const vFixed = (v * (size - 1) + 0.5) / size;
   return [uFixed, vFixed];
 }
+
+export interface SplitSumInput {
+  baseColor: [number, number, number];
+  roughness: number;
+  metallic: number;
+  NdotV: number;
+  brdfLutScale: number; // RG.R of BRDF LUT
+  brdfLutBias: number;  // RG.G of BRDF LUT
+  irradiance: [number, number, number];
+  prefiltered: [number, number, number];
+}
+
+/**
+ * Compute final shaded RGB via split-sum composition.
+ * Mirrors GLSL: shaders/pbr.frag → steps 4-6
+ * Mirrors Python: src/shading/pbr_model.py:91-107 (shade_submesh)
+ */
+export function splitSumShade(input: SplitSumInput): [number, number, number] {
+  const { baseColor, metallic, NdotV, brdfLutScale, brdfLutBias, irradiance, prefiltered } = input;
+
+  // F0 = mix(0.04, baseColor, metallic)
+  const F0: [number, number, number] = [
+    0.04 * (1 - metallic) + baseColor[0] * metallic,
+    0.04 * (1 - metallic) + baseColor[1] * metallic,
+    0.04 * (1 - metallic) + baseColor[2] * metallic,
+  ];
+
+  // Diffuse: kd = (1 - metallic) * (1 - F0)
+  const kd = (1 - metallic);
+  const diffuse: [number, number, number] = [
+    kd * (1 - F0[0]) * baseColor[0] * irradiance[0],
+    kd * (1 - F0[1]) * baseColor[1] * irradiance[1],
+    kd * (1 - F0[2]) * baseColor[2] * irradiance[2],
+  ];
+
+  // Specular: (F0 * scale + bias) * prefiltered
+  const specular: [number, number, number] = [
+    (F0[0] * brdfLutScale + brdfLutBias) * prefiltered[0],
+    (F0[1] * brdfLutScale + brdfLutBias) * prefiltered[1],
+    (F0[2] * brdfLutScale + brdfLutBias) * prefiltered[2],
+  ];
+
+  // Combine + clamp
+  return [
+    Math.max(0, Math.min(1, diffuse[0] + specular[0])),
+    Math.max(0, Math.min(1, diffuse[1] + specular[1])),
+    Math.max(0, Math.min(1, diffuse[2] + specular[2])),
+  ];
+}
