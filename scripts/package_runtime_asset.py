@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
+from src.mesh import load_mesh, MultiMeshData
+
 
 SCHEMA_VERSION = 1
 GENERATOR_TOOL = "differentiable-baker"
@@ -140,3 +142,23 @@ def _build_submesh_entry(name: str, tex_dir: Path, textures_prefix: str) -> dict
         "match_by": "primitive_name",
         "textures": textures,
     }
+
+
+def extract_glb_submesh_names(glb_path: str) -> list[str]:
+    """Extract submesh names from a GLB, matching training-time conventions.
+
+    Uses src.mesh.load_mesh (which goes through gltf_loader → MultiMeshData).
+    The names follow: mesh.name or mesh_{node.mesh}, with _prim{pi} suffix
+    when a mesh has multiple primitives.
+
+    Args:
+        glb_path: Path to .glb file.
+
+    Returns:
+        Ordered list of submesh names (one per primitive).
+    """
+    mesh = load_mesh(glb_path)
+    if hasattr(mesh, "submeshes"):
+        return [s.name for s in mesh.submeshes]
+    # Single MeshData — use the mesh's name or fall back to "mesh_0"
+    return [getattr(mesh, "name", None) or "mesh_0"]

@@ -81,3 +81,25 @@ def test_discover_submeshes_multi(tmp_path):
     assert submeshes[0]["name"] == "mesh_0"
     assert submeshes[0]["textures"]["base_color"] == "textures/mesh_0/base_color.png"
     assert submeshes[1]["name"] == "mesh_1"
+
+
+def test_extract_glb_submesh_names_uses_gltf_loader(tmp_path, monkeypatch):
+    """GLB submesh names come from src.gltf_loader, matching training-time names."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.package_runtime_asset import extract_glb_submesh_names
+
+    fake_submeshes = [
+        {"name": "helmet_mesh"},
+        {"name": "visor_mesh"},
+    ]
+
+    def fake_load(path):
+        class FakeMultiMesh:
+            submeshes = [type("S", (), {"name": s["name"]})() for s in fake_submeshes]
+        return FakeMultiMesh()
+
+    monkeypatch.setattr("scripts.package_runtime_asset.load_mesh", fake_load)
+
+    names = extract_glb_submesh_names("dummy.glb")
+
+    assert names == ["helmet_mesh", "visor_mesh"]
