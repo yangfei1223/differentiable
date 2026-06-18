@@ -37,7 +37,10 @@ void main() {
   vec3 V = normalize(vViewDirW);
 
   // ===== 1. Material decode (mirror Python: src/shading/pbr/material.py -> decode_material) =====
-  vec3 baseColor = pow(texture(uBaseColor, vUV).rgb, vec3(2.2));
+  // NOTE: base_color.png is exported by Python with pow(1/2.2) sRGB encoding (pbr_model.py:259).
+  // Three.js texture.colorSpace = SRGBColorSpace auto-decodes sRGB→linear at GPU sampler level,
+  // so we receive LINEAR values here — NO additional pow(2.2) needed (would cause double decode).
+  vec3 baseColor = texture(uBaseColor, vUV).rgb;
   float roughness = texture(uRoughness, vUV).r;
   float metallic = texture(uMetallic, vUV).r;
   vec3 normalTS = texture(uNormalMap, vUV).rgb * 2.0 - 1.0;

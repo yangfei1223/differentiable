@@ -39,7 +39,10 @@ export class Environment {
    * @param brdfLutUrl Blob URL for brdf_lut.png
    */
   static async fromUrls(envMapUrl: string, brdfLutUrl: string): Promise<Environment> {
-    const envMap = await loadTexture(envMapUrl, THREE.SRGBColorSpace, true);
+    // env_map.png contains LINEAR radiance values (env_map.py:143-145 saves decoded softplus
+    // values ×255 directly, no sRGB encoding). Must use Linear colorSpace to avoid
+    // incorrect sRGB→linear decode by Three.js.
+    const envMap = await loadTexture(envMapUrl, THREE.LinearSRGBColorSpace, true);
     const brdfLut = await loadTexture(brdfLutUrl, THREE.LinearSRGBColorSpace, false);
 
     // Detect BRDF LUT size from the loaded image (assume square)
