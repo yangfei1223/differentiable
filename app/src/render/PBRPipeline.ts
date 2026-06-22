@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { AssetBundle } from '../app/SceneLoader';
 import { Environment } from './Environment';
 import { PBRMesh } from './PBRMesh';
+import { computeVertexTangents } from './computeTangents';
 
 /**
  * Owns the Three.js renderer, scene, camera, and the currently-loaded scene's PBRMeshes.
@@ -92,6 +93,13 @@ export class PBRPipeline {
     let meshIdx = 0;
     gltf.scene.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
+
+      // Compute vertex tangents (Mikktspace-style, mirrors Python src/mesh.py:78-141)
+      // The source GLB has no TANGENT attribute, so we compute it from geometry.
+      if (!obj.geometry.attributes.tangent) {
+        computeVertexTangents(obj.geometry);
+        console.log(`[PBRPipeline] Computed tangents for mesh ${meshIdx}: ${obj.geometry.attributes.tangent.count} vertices`);
+      }
 
       // Resolve real glTF mesh name by walking up to the top-level node,
       // then mapping node.name → mesh.name via our precomputed lookup.
