@@ -3,8 +3,7 @@
 // Inputs from vertex shader
 in vec2 vUV;
 in vec3 vNormalW;
-in vec3 vTangentW;
-in vec3 vBitangentW;
+in vec3 vWorldPos;
 in vec3 vViewDirW;
 
 // Output
@@ -31,9 +30,36 @@ uniform int   uDebug;            // 0=off, 1=baseColor, 2=roughness, 3=metallic,
 
 void main() {
   vec3 N = normalize(vNormalW);
-  vec3 T = normalize(vTangentW);
-  vec3 B = normalize(vBitangentW);
   vec3 V = normalize(vViewDirW);
+
+  // Build TBN from world-position and UV screen-space derivatives.
+  // This matches Mikktspace tangent computation (src/mesh.py:78) which uses
+  // triangle edges (dp1, dp2) and UV deltas (duv1, duv2) to compute tangent:
+  //   T = normalize(dv2 * dp1 - dv1 * dp2) where dp = dPosition, dv = dUV
+  // The screen-derivative form below is equivalent on a per-fragment basis.
+  vec3 dpdx = dFdx(vWorldPos);
+  vec3 dpdy = dFdy(vWorldPos);
+  vec2 duvdx = dFdx(vUV);
+  vec2 duvdy = dFdy(vUV);
+
+  // Solve the linear system: [dp1 dp2] = [T B] * [duv1; duv2]
+  // inv = 1/det * [duv2.y -duv1.y; -duv2.x duv1.x]
+  float det = duvdx.x * duvdy.y - duvdy.x * duvdx.y;
+  vec3 T;
+  if (abs(det) > 1e-10) {
+    float invdet = 1.0 / det;
+    // T = (duv2.y * dp1 - duv1.y * dp2) * invdet
+    T = (duvdy.y * dpdx - duvdx.y * dpdy) * invdet;
+    // Orthogonalize T against N (Gram-Schmidt, matches Python mesh.py:127)
+    T = normalize(T - dot(T, N) * N);
+  } else {
+    // Degenerate UV (edge-on): fall back to synthetic tangent
+    vec3 absN = abs(N);
+    vec3 ref = (absN.x < 0.9) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    T = normalize(ref - dot(ref, N) * N);
+  }
+  // Bitangent = cross(N, T) — matches Python mesh.py:139 (no tangent.w)
+  vec3 B = normalize(cross(N, T));
 
   // ===== 1. Material decode =====
   vec3 baseColor = texture(uBaseColor, vUV).rgb;
