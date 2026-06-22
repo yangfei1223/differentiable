@@ -40,6 +40,46 @@ export class App {
       }
     });
 
+    // Debug channel cycler: window-level keyboard listener (canvas focus is unreliable)
+    const debugLabels = [
+      'OFF (final)',
+      '1: baseColor',
+      '2: roughness',
+      '3: metallic',
+      '4: normalTS',
+      '5: normalW',
+      '6: NdotV',
+      '7: irradiance',
+      '8: prefiltered',
+      '9: diffuse',
+      '10: specular',
+      '11: brdf',
+      '12: envUV(0.5,0.5) mip0',
+      '13: envUV(0.5,0.5) mip9',
+      '14: envUV(vUV) mip0',
+    ];
+    let debugMode = 0;
+    const debugHud = document.createElement('div');
+    debugHud.id = 'pbr-debug-hud';
+    debugHud.style.cssText = 'position:fixed;left:8px;bottom:8px;padding:8px 12px;background:#000;color:#0f0;font:14px monospace;pointer-events:none;border-radius:4px;z-index:9999;border:1px solid #0f0;';
+    debugHud.textContent = `DEBUG: ${debugLabels[debugMode]}  (press 0-9, or backtick to cycle)`;
+    document.body.appendChild(debugHud);
+    window.addEventListener('keydown', (e) => {
+      const key = e.key;
+      let newMode: number | null = null;
+      if (key >= '0' && key <= '9') {
+        newMode = parseInt(key, 10);
+      } else if (key === '`' || key === '~') {
+        newMode = (debugMode + 1) % debugLabels.length;
+      }
+      if (newMode !== null) {
+        debugMode = newMode;
+        this.pipeline.setDebugMode(debugMode);
+        debugHud.textContent = `DEBUG: ${debugLabels[debugMode]}`;
+        console.log('[PBR DEBUG] mode =', debugMode, debugLabels[debugMode]);
+      }
+    });
+
     // UI overlays
     this.perfStats = new PerfStats(container);
     this.loading = new LoadingOverlay(container);
@@ -63,6 +103,9 @@ export class App {
 
     // Start animation loop
     this.animate();
+
+    // Expose pipeline globally for debugging (agent-browser eval)
+    (window as any).__pipeline = this.pipeline;
   }
 
   private async loadScene(source: string | File): Promise<void> {

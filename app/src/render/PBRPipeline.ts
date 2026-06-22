@@ -45,7 +45,11 @@ export class PBRPipeline {
     this.disposeScene();
 
     // 1. Load env map + BRDF LUT
-    this.currentEnv = await Environment.fromUrls(bundle.envMapUrl, bundle.brdfLutUrl);
+    this.currentEnv = await Environment.fromUrls(
+      bundle.envMapUrl,
+      bundle.brdfLutUrl,
+      bundle.manifest.environment.is_hdr,
+    );
 
     // 2. Detect BRDF LUT size from the loaded image
     const brdfLutSize = this.currentEnv.brdfLutSize;
@@ -53,37 +57,75 @@ export class PBRPipeline {
     // 3. Load GLB
     const gltf = await this.gltfLoader.loadAsync(bundle.glbUrl);
 
+    // 3a. Extract glTF JSON to build the REAL mesh.name → mesh index map.
+    // CRITICAL: Three.js GLTFLoader assigns obj.name = NODE name, but Python's
+    // packaging extracts submesh names from MESH name (src/gltf_loader.py:128).
+    // Without this remapping, primitive_name matching fails silently.
+    const gltfJson = ((gltf as any).parser?.json ?? {}) as {
+      meshes?: Array<{ name?: string }>;
+      nodes?: Array<{ name?: string; mesh?: number }>;
+    };
+    const meshNameByIndex = new Map<number, string>();
+    (gltfJson.meshes ?? []).forEach((m, i) => {
+      meshNameByIndex.set(i, m.name ?? `mesh_${i}`);
+    });
+    // Build: node.name → mesh.name (resolved via nodes[].mesh index)
+    const nodeNameToMeshName = new Map<string, string>();
+    for (const node of gltfJson.nodes ?? []) {
+      if (node.mesh !== undefined && node.name) {
+        const m = meshNameByIndex.get(node.mesh);
+        if (m) nodeNameToMeshName.set(node.name, m);
+      }
+    }
+
     // 4. Walk glTF scene, find Mesh primitives, match to submesh manifest entries
     const pbrMeshes: PBRMesh[] = [];
 
     gltf.scene.updateMatrixWorld(true);
 
-    // Build three lookup maps for the three match_by strategies
+    // Build lookup maps for the three match_by strategies.
+    // byPrimitiveName resolves the REAL glTF mesh name (not node name).
     const byPrimitiveName = new Map<string, THREE.Mesh[]>();
     const byMaterialName = new Map<string, THREE.Mesh[]>();
     const byMeshIndex = new Map<number, THREE.Mesh[]>();
 
     let meshIdx = 0;
     gltf.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        // By primitive name (current behavior)
-        const meshName = obj.name || `mesh_${meshIdx}`;
-        if (!byPrimitiveName.has(meshName)) byPrimitiveName.set(meshName, []);
-        byPrimitiveName.get(meshName)!.push(obj);
+      if (!(obj instanceof THREE.Mesh)) return;
 
-        // By material name
-        const mat = obj.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
-        const matName = Array.isArray(mat) ? mat[0]?.name : mat?.name;
-        if (matName) {
-          if (!byMaterialName.has(matName)) byMaterialName.set(matName, []);
-          byMaterialName.get(matName)!.push(obj);
-        }
-
-        // By mesh index (sequential numbering)
-        byMeshIndex.set(meshIdx, [obj]);
-        meshIdx++;
+      // Resolve real glTF mesh name by walking up to the top-level node,
+      // then mapping node.name → mesh.name via our precomputed lookup.
+      let topoParent: THREE.Object3D = obj;
+      while (topoParent.parent && topoParent.parent !== gltf.scene) {
+        topoParent = topoParent.parent;
       }
+      let resolvedMeshName = topoParent.name || `mesh_${meshIdx}`;
+      if (nodeNameToMeshName.has(topoParent.name)) {
+        resolvedMeshName = nodeNameToMeshName.get(topoParent.name)!;
+      }
+      console.log(`[PBRPipeline] primitive #${meshIdx}: obj.name="${obj.name}" topoParent.name="${topoParent.name}" → resolvedMeshName="${resolvedMeshName}"`);
+
+      if (!byPrimitiveName.has(resolvedMeshName)) byPrimitiveName.set(resolvedMeshName, []);
+      byPrimitiveName.get(resolvedMeshName)!.push(obj);
+
+      // By material name
+      const mat = obj.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
+      const matName = Array.isArray(mat) ? mat[0]?.name : mat?.name;
+      if (matName) {
+        if (!byMaterialName.has(matName)) byMaterialName.set(matName, []);
+        byMaterialName.get(matName)!.push(obj);
+      }
+
+      // By mesh index (sequential numbering)
+      byMeshIndex.set(meshIdx, [obj]);
+      meshIdx++;
     });
+
+    console.log('[PBRPipeline] submesh match lookup summary:');
+    console.log('  byPrimitiveName keys:', Array.from(byPrimitiveName.keys()));
+    console.log('  byMaterialName keys: ', Array.from(byMaterialName.keys()));
+    console.log('  byMeshIndex keys:    ', Array.from(byMeshIndex.keys()));
+    console.log('  manifest submeshes:  ', bundle.manifest.submeshes.map(s => `${s.name} (match_by=${s.match_by})`));
 
     // For each submesh manifest entry, find matching primitive(s)
     for (const submesh of bundle.manifest.submeshes) {
@@ -124,11 +166,28 @@ export class PBRPipeline {
       }
     }
 
+    if (pbrMeshes.length === 0) {
+      console.error('[PBRPipeline] FATAL: 0 PBR materials created. Scene will render with glTF default materials.');
+    } else {
+      console.log(`[PBRPipeline] Created ${pbrMeshes.length} PBR material(s).`);
+    }
+
     // 5. Add glTF scene to render scene
     this.scene.add(gltf.scene);
     this.pbrMeshes = pbrMeshes;
 
     return { meshes: pbrMeshes, env: this.currentEnv };
+  }
+
+  /** Set debug mode on all PBR materials. 0 = off, 1..N = channel. */
+  setDebugMode(mode: number): void {
+    console.log(`[setDebugMode] mode=${mode}, pbrMeshes.length=${this.pbrMeshes.length}`);
+    for (const m of this.pbrMeshes) {
+      const mat = m.mesh.material as THREE.ShaderMaterial;
+      console.log(`[setDebugMode] mesh=${m.mesh.name}, mat.type=${mat.type}, mat.isShaderMaterial=${mat.isShaderMaterial}, uDebug was=${mat.uniforms.uDebug?.value}`);
+      mat.uniforms.uDebug.value = mode;
+      mat.needsUpdate = true;
+    }
   }
 
   /** Compute bounding sphere of the loaded scene. */

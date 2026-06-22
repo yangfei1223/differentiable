@@ -10,7 +10,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -240,10 +242,64 @@ def package_asset(
     # Discover texture submeshes
     submeshes = discover_submeshes(epoch_dir, scene_name, glb_submesh_names)
 
-    # Validate env_map at top level
-    env_map_file = epoch_dir / "env_map.png"
-    if not env_map_file.exists():
-        raise FileNotFoundError(f"Missing env_map.png: {env_map_file}")
+    # Validate env_map: prefer .hdr (preserves training-time HDR values),
+    # fall back to .png (lossy clamp to [0,1]).
+    env_map_hdr_file = epoch_dir / "env_map.hdr"
+    env_map_png_file = epoch_dir / "env_map.png"
+
+    env_map_zip_path: str
+    env_map_is_hdr: bool
+    env_map_bytes: bytes | None = None  # only set when we generate on-the-fly
+
+    if env_map_hdr_file.exists():
+        env_map_zip_path = "textures/env_map.hdr"
+        env_map_is_hdr = True
+        print(f"  [INFO] Using HDR env_map: {env_map_hdr_file}")
+    else:
+        # Try to generate .hdr from checkpoint on-the-fly
+        ckpt_file = epoch_dir / "pbr_checkpoint.pt"
+        if ckpt_file.exists():
+            try:
+                import torch
+                import torch.nn.functional as F
+                from src.shading.pbr.hdr_writer import write_hdr_from_tensor
+
+                state = torch.load(ckpt_file, map_location="cpu", weights_only=False)
+                if "env_map" in state:
+                    raw = state["env_map"]
+                    decoded = F.softplus(raw)
+                    buf = io.BytesIO()
+                    # write_hdr_from_tensor writes to file path; use temp file
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".hdr", delete=False) as tf:
+                        temp_path = tf.name
+                    write_hdr_from_tensor(temp_path, decoded)
+                    with open(temp_path, "rb") as f:
+                        env_map_bytes = f.read()
+                    os.unlink(temp_path)
+                    env_map_zip_path = "textures/env_map.hdr"
+                    env_map_is_hdr = True
+                    # Also persist alongside epoch_dir for reuse
+                    try:
+                        write_hdr_from_tensor(str(env_map_hdr_file), decoded)
+                        print(f"  [INFO] Generated HDR env_map from checkpoint: {env_map_hdr_file}")
+                    except Exception:
+                        pass
+                else:
+                    raise KeyError("checkpoint has no 'env_map' key")
+            except Exception as e:
+                print(f"  [WARN] Could not generate HDR env_map from checkpoint: {e}")
+                env_map_bytes = None
+
+        if env_map_bytes is None:
+            # Fall back to PNG
+            if not env_map_png_file.exists():
+                raise FileNotFoundError(
+                    f"Missing env_map.png and env_map.hdr (and no usable checkpoint): {epoch_dir}"
+                )
+            env_map_zip_path = "textures/env_map.png"
+            env_map_is_hdr = False
+            print(f"  [WARN] Using LDR env_map.png (lossy clamp — colors may shift)")
 
     # BRDF LUT: prefer brdf_lut.png (already data format from new logger);
     # fall back to .pt regeneration for old epoch dirs.
@@ -278,10 +334,11 @@ def package_asset(
         scene_name=scene_name,
         glb_path="geometry/scene.glb",
         submeshes=submeshes,
-        env_map_path="textures/env_map.png",
+        env_map_path=env_map_zip_path,
         brdf_lut_path="textures/brdf_lut.png",
         epoch=epoch,
         psnr_db=psnr_db,
+        is_hdr=env_map_is_hdr,
     )
 
     # Build the zip
@@ -292,8 +349,13 @@ def package_asset(
         # Geometry
         zf.write(glb_path, "geometry/scene.glb")
 
-        # Env map
-        zf.write(env_map_file, "textures/env_map.png")
+        # Env map: HDR bytes (generated) or source file (.hdr or .png)
+        if env_map_bytes is not None:
+            zf.writestr(env_map_zip_path, env_map_bytes)
+        elif env_map_is_hdr:
+            zf.write(env_map_hdr_file, env_map_zip_path)
+        else:
+            zf.write(env_map_png_file, env_map_zip_path)
 
         # BRDF LUT: use regenerated data PNG if available, else fallback
         if brdf_lut_data_png is not None:

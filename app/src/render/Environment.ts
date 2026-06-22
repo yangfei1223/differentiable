@@ -1,10 +1,15 @@
 import * as THREE from 'three';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 
 /**
  * Loads and configures the environment map + BRDF LUT textures.
  *
- * The env map is loaded as sRGB (matching Python's export of clamped [0,1] PNG),
- * then Three.js converts to linear for shader use.
+ * The env map can be:
+ *   - HDR (.hdr RGBE) — preferred. Preserves training-time HDR values that
+ *     PNG would clamp to [0,1], distorting the diffuse/specular color balance.
+ *     Python training decodes env_map via softplus: max can reach ~17.
+ *   - LDR (.png) — fallback. Lossy. Use only when no HDR available.
+ *
  * Mipmaps are auto-generated so textureLod can sample prefiltered specular.
  */
 export class Environment {
@@ -35,14 +40,23 @@ export class Environment {
   /**
    * Build Environment from blob URLs.
    *
-   * @param envMapUrl Blob URL for env_map.png
+   * @param envMapUrl Blob URL for env_map.hdr or env_map.png
    * @param brdfLutUrl Blob URL for brdf_lut.png
+   * @param isHdr True if env map is HDR (.hdr RGBE format)
    */
-  static async fromUrls(envMapUrl: string, brdfLutUrl: string): Promise<Environment> {
-    // env_map.png contains LINEAR radiance values (env_map.py:143-145 saves decoded softplus
-    // values ×255 directly, no sRGB encoding). Must use Linear colorSpace to avoid
-    // incorrect sRGB→linear decode by Three.js.
-    const envMap = await loadTexture(envMapUrl, THREE.LinearSRGBColorSpace, true);
+  static async fromUrls(
+    envMapUrl: string,
+    brdfLutUrl: string,
+    isHdr: boolean,
+  ): Promise<Environment> {
+    // HDR (RGBE) loader returns a DataTexture with HalfFloatType data already
+    // in linear space. No colorspace conversion needed.
+    // LDR PNG path mirrors Python training's interpretation: env_map.png is
+    // stored with LINEAR values (decoded softplus directly ×255, no sRGB
+    // encoding). Use LinearSRGBColorSpace to avoid incorrect sRGB→linear.
+    const envMap = isHdr
+      ? await loadHdrEnvMap(envMapUrl)
+      : await loadTexture(envMapUrl, THREE.LinearSRGBColorSpace, true);
     const brdfLut = await loadTexture(brdfLutUrl, THREE.LinearSRGBColorSpace, false);
 
     // Detect BRDF LUT size from the loaded image (assume square)
@@ -62,7 +76,34 @@ export class Environment {
 }
 
 /**
- * Load a PNG texture from a URL with specified color space and mipmap option.
+ * Load an HDR (.hdr RGBE) env map. Returns a DataTexture in linear space.
+ */
+function loadHdrEnvMap(url: string): Promise<THREE.Texture> {
+  return new Promise((resolve, reject) => {
+    const loader = new RGBELoader();
+    loader.setDataType(THREE.HalfFloatType); // efficient for sampling
+    loader.load(
+      url,
+      (texture) => {
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.wrapS = THREE.RepeatWrapping; // equirect wraps horizontally
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        // RGBELoader produces linear data already; ensure colorSpace is NoColorSpace
+        // so Three.js doesn't apply any further sRGB decode.
+        texture.colorSpace = THREE.NoColorSpace;
+        texture.needsUpdate = true;
+        resolve(texture);
+      },
+      undefined,
+      (err) => reject(new Error(`Failed to load HDR env map ${url}: ${err}`)),
+    );
+  });
+}
+
+/**
+ * Load a PNG texture (LDR fallback) with specified color space and mipmap option.
  */
 function loadTexture(
   url: string,

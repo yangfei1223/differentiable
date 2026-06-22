@@ -30,11 +30,17 @@ export function glslIncludePlugin(): Plugin {
   return {
     name: 'glsl-include-resolver',
     enforce: 'pre',
-    transform(code, id) {
-      if (!id.endsWith('.glsl?raw') && !id.endsWith('.glsl')) return null;
-      const dir = path.dirname(id.replace(/\?raw$/, ''));
-      const resolved = resolveIncludes(code, dir);
-      return { code: resolved, map: null };
+    // Vite's built-in `?raw` handler short-circuits before transform runs,
+    // so we intercept `load` (which fires before the built-in ?raw handler
+    // when enforce:'pre') and resolve includes inline.
+    async load(id) {
+      const cleaned = id.replace(/\?.*$/, '');
+      const isGlsl = /\.(glsl|vert|frag|vs|fs)$/.test(cleaned);
+      const hasRaw = /\?raw(&|$)/.test(id);
+      if (!isGlsl || !hasRaw) return null;
+      const source = await fs.promises.readFile(cleaned, 'utf-8');
+      const resolved = resolveIncludes(source, path.dirname(cleaned));
+      return `export default ${JSON.stringify(resolved)};`;
     },
   };
 }

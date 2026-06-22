@@ -45,6 +45,11 @@ export class PBRMesh {
     ]);
 
     return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      // Disable Three.js auto-injection of tonemapping/colorspace chunks —
+      // our pbr.frag writes final linear color directly; Three.js post-processing
+      // (outputColorSpace=SRGB) will handle linear→sRGB at the renderer level.
+      toneMapped: false,
       vertexShader: vertSrc,
       fragmentShader: fragSrc,
       uniforms: {
@@ -58,6 +63,7 @@ export class PBRMesh {
         uDiffuseMipBias: { value: env.diffuseMipBias },
         uNormalMapEnabled: { value: true },
         uBRDFLutSize: { value: new THREE.Vector2(brdfLutSize, brdfLutSize) },
+        uDebug: { value: 0 },
       },
     });
   }
@@ -90,8 +96,9 @@ async function loadMaterialTexture(
         texture.generateMipmaps = true;
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.magFilter = THREE.LinearFilter;
-        texture.wrapS = THREE.ClampToEdgeWrapping;
-        texture.wrapT = THREE.ClampToEdgeWrapping;
+        // RepeatWrapping so fract(uv) in shader + any minor overflow samples correctly
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
         texture.needsUpdate = true;
         resolve(texture);
       },

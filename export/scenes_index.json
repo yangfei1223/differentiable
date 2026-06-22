@@ -2,7 +2,7 @@
   {
     "name": "helmet",
     "file": "/scenes/helmet_pbr.zip",
-    "psnr_db": 20.81,
+    "psnr_db": null,
     "epoch": 2000
   },
   {

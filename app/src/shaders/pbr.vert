@@ -1,21 +1,10 @@
-#version 300 es
-
-precision highp float;
-
 #include "common.glsl"
 
-// Vertex attributes (Three.js default names)
-in vec3 position;
-in vec2 uv;
-in vec3 normal;
+// Custom attribute (Three.js auto-injects position/uv/normal in ShaderMaterial).
 in vec4 tangent; // xyz=dir, w=sign for bitangent handedness
 
-// Uniforms (Three.js auto-injects these)
-uniform mat4 modelMatrix;
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-uniform mat3 normalMatrix;
-uniform vec3 cameraPosition;
+// NOTE: modelMatrix, modelViewMatrix, projectionMatrix, normalMatrix,
+// cameraPosition are auto-injected by Three.js for ShaderMaterial.
 
 // Outputs to fragment shader
 out vec2 vUV;
@@ -27,7 +16,10 @@ out vec3 vViewDirW;
 void main() {
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
 
-  vUV = uv;
+  // Wrap UV into [0,1] — some glTF exports emit UVs in [1,2] range (offset by 1)
+  // which combined with ClampToEdge produces single-color sampling.
+  // fract() is the GLSL idiom for mod(x, 1.0).
+  vUV = fract(uv);
   vNormalW = normalize(mat3(modelMatrix) * normal);
   vTangentW = normalize(mat3(modelMatrix) * tangent.xyz);
 
