@@ -23,9 +23,10 @@ void main() {
   vNormalW = normalize(mat3(modelMatrix) * normal);
   vTangentW = normalize(mat3(modelMatrix) * tangent.xyz);
 
-  // Bitangent: cross(N, T) * tangent.w (glTF convention)
-  // Mirrors Python: src/mesh.py -> compute_vertex_tangents -> B = cross(N, T)
-  vBitangentW = normalize(cross(vNormalW, vTangentW) * tangent.w);
+  // Bitangent: cross(N, T) (Python style — no handedness multiplication)
+  // Python: bitangent = cross(normal, tangent) with NO tangent.w multiplication.
+  // glTF tangent.w encodes handedness, but Python ignores it, so we must too.
+  vBitangentW = normalize(cross(vNormalW, vTangentW));
 
   // View direction: from camera to fragment, in world space
   // Mirrors Python: view_dirs is normalized (camera-to-vertex)

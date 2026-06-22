@@ -65,6 +65,12 @@ export class App {
       '20: R direction',
       '21: env at warm spot',
       '22: env at cool spot',
+      '23: prefiltered (r^2 * mip)',
+      '24: prefiltered ((1-NV)*r*mip)',
+      '25: prefiltered mip 5',
+      '26: prefiltered mip 6',
+      '27: prefiltered mip 7',
+      '28: prefiltered mip 8',
     ];
     let debugMode = 0;
     const debugHud = document.createElement('div');

@@ -109,6 +109,7 @@ function loadHdrEnvMap(url: string): Promise<THREE.Texture> {
         }));
         texture.generateMipmaps = false; // we provide mipmaps manually
         texture.needsUpdate = true;
+        console.log(`[Environment] HDR env: ${texture.image.width}x${texture.image.height}, ${texture.mipmaps.length} mip levels, first mip mean ~${(texture.image.data as Float32Array).slice(0, 12)}`);
         resolve(texture);
       },
       undefined,

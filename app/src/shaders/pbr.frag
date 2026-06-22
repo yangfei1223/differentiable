@@ -55,12 +55,24 @@ void main() {
   // ===== 4. F0 + Diffuse =====
   vec3 F0 = mix(vec3(0.04), baseColor, metallic);
   vec3 kd = (1.0 - metallic) * (1.0 - F0);
-  vec3 irradiance = textureLod(uEnvMap, direction_to_uv(N), uDiffuseMipBias).rgb;
+  // Use texture() with bias for BOTH diffuse and specular to match nvdiffrast's
+  // mip_level_bias behavior (bias added to auto-LOD from UV derivatives).
+  vec3 irradiance = texture(uEnvMap, direction_to_uv(N), uDiffuseMipBias).rgb;
   vec3 diffuse = kd * baseColor * irradiance;
 
   // ===== 5. Specular =====
+  // Match Python env_map.sample_specular(): mip_level_bias = roughness * max_mip.
+  // nvdiffrast treats this as bias (added to auto-LOD). textureLod uses absolute LOD.
+  // On a curved surface, R direction varies rapidly between adjacent pixels, so
+  // the auto-LOD computed by nvdiffrast from UV derivatives can be substantial.
+  // We approximate Python's behavior by using GLSL texture() with bias (auto-LOD + bias).
+  // texture(s, uv, bias) computes auto-LOD from screen derivatives and adds the bias.
+  // Empirically: texture() alone gives ~B/G=0.73 vs GT 0.91 — bias contribution helps
+  // but isn't enough. May need to amplify bias to compensate for differences in
+  // nvdiffrast's auto-LOD formula vs GLSL's.
   float specLod = roughness * uMaxEnvMip;
-  // Use specLod for prefiltered, matching Python env_map.sample_specular().
+  // DEBUG: try floor() to force integer mip (skip trilinear interpolation)
+  // vec3 prefiltered = textureLod(uEnvMap, direction_to_uv(R), floor(specLod)).rgb;
   vec3 prefiltered = textureLod(uEnvMap, direction_to_uv(R), specLod).rgb;
 
   vec2 brdfUv = (vec2(NdotV, roughness) * (uBRDFLutSize - 1.0) + 0.5) / uBRDFLutSize;
@@ -106,6 +118,34 @@ void main() {
   if (uDebug == 20) { fragColor = vec4(R * 0.5 + 0.5, 1.0); return; }
   if (uDebug == 21) { fragColor = vec4(textureLod(uEnvMap, vec2(0.75, 0.3), 0.0).rgb, 1.0); return; }
   if (uDebug == 22) { fragColor = vec4(textureLod(uEnvMap, vec2(0.25, 0.7), 0.0).rgb, 1.0); return; }
+
+  // ===== PIXEL DUMP for AB comparison =====
+  // Encode R direction (in [-1,1]) into 3 byte channels with bias 0.5
+  // We need a way to read per-pixel R from outside the shader.
+  // Mode 23: R.x encoded as red, encoded as pow(0.5+0.5*R.x, 1/2.2)*255
+  // For now, just visualize prefiltered with even more controlled params
+  if (uDebug == 23) {
+    // Try: prefiltered with mip = pow(roughness, 2.0) * uMaxEnvMip (Epic's convention)
+    float lod_alt = roughness * roughness * uMaxEnvMip;
+    vec3 prefiltered_alt = textureLod(uEnvMap, direction_to_uv(R), lod_alt).rgb;
+    fragColor = vec4(prefiltered_alt, 1.0);
+    return;
+  }
+  if (uDebug == 24) {
+    // Try: prefiltered with mip = (1 - NdotV) * roughness * uMaxEnvMip
+    float lod_alt = (1.0 - NdotV) * roughness * uMaxEnvMip;
+    vec3 prefiltered_alt = textureLod(uEnvMap, direction_to_uv(R), lod_alt).rgb;
+    fragColor = vec4(prefiltered_alt, 1.0);
+    return;
+  }
+  // 25: prefiltered at mip 5 (fixed) — control sample for fractional LOD comparison
+  if (uDebug == 25) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), 5.0).rgb, 1.0); return; }
+  // 26: prefiltered at mip 6 (fixed)
+  if (uDebug == 26) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), 6.0).rgb, 1.0); return; }
+  // 27: prefiltered at mip 7 (fixed)
+  if (uDebug == 27) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), 7.0).rgb, 1.0); return; }
+  // 28: prefiltered at mip 8 (fixed)
+  if (uDebug == 28) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), 8.0).rgb, 1.0); return; }
 
   // ===== Final: apply linear -> sRGB encoding (mirror Python pbr_logger.py:162) =====
   // Python training saves rendered debug PNG as: rgb.clamp(0,1).pow(1/2.2) * 255

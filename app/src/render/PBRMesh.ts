@@ -61,7 +61,7 @@ export class PBRMesh {
         uBRDFLut: { value: env.brdfLut },
         uMaxEnvMip: { value: env.maxEnvMip },
         uDiffuseMipBias: { value: env.diffuseMipBias },
-        uNormalMapEnabled: { value: true },
+        uNormalMapEnabled: { value: true }, // re-enable normal map
         uBRDFLutSize: { value: new THREE.Vector2(brdfLutSize, brdfLutSize) },
         uDebug: { value: 0 },
       },
