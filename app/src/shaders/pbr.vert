@@ -1,10 +1,8 @@
 #include "common.glsl"
 
-// Custom attribute (Three.js auto-injects position/uv/normal in ShaderMaterial).
-in vec4 tangent; // xyz=dir, w=sign for bitangent handedness
-
 // NOTE: modelMatrix, modelViewMatrix, projectionMatrix, normalMatrix,
-// cameraPosition are auto-injected by Three.js for ShaderMaterial.
+// cameraPosition, position, uv, normal are auto-injected by Three.js
+// ShaderMaterial in GLSL3 mode (via #define attribute in).
 
 // Outputs to fragment shader
 out vec2 vUV;
@@ -18,14 +16,17 @@ void main() {
 
   // Wrap UV into [0,1] — some glTF exports emit UVs in [1,2] range (offset by 1)
   // which combined with ClampToEdge produces single-color sampling.
-  // fract() is the GLSL idiom for mod(x, 1.0).
   vUV = fract(uv);
   vNormalW = normalize(mat3(modelMatrix) * normal);
-  vTangentW = normalize(mat3(modelMatrix) * tangent.xyz);
 
-  // Bitangent: cross(N, T) (Python style — no handedness multiplication)
-  // Python: bitangent = cross(normal, tangent) with NO tangent.w multiplication.
-  // glTF tangent.w encodes handedness, but Python ignores it, so we must too.
+  // Build tangent space from world-space normal (Mikktspace fallback).
+  // Source mesh has no TANGENT attribute, so we synthesize an orthonormal
+  // TBN basis: pick a vector not parallel to N, project to perpendicular,
+  // normalize → T. Bitangent = cross(N, T) (matches Python src/mesh.py:139,
+  // which also does NOT multiply by tangent.w).
+  vec3 absN = abs(vNormalW);
+  vec3 ref = (absN.x < 0.9) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+  vTangentW = normalize(ref - dot(ref, vNormalW) * vNormalW);
   vBitangentW = normalize(cross(vNormalW, vTangentW));
 
   // View direction: from camera to fragment, in world space
