@@ -41,6 +41,32 @@ export class CameraControls {
     this.controls.update();
   }
 
+  /**
+   * Set explicit camera from Blender Z-up coords (training cameras.json).
+   * Conversion: Blender (X, Y, Z_up) → Three.js (X, Z_up, -Y).
+   */
+  setFromBlenderCamera(params: {
+    position: [number, number, number];
+    look_at: [number, number, number];
+    up: [number, number, number];
+    fov_deg: number;
+  }): void {
+    const [bx, by, bz] = params.position;
+    const [tx, ty, tz] = params.look_at;
+    const [ux, uy, uz] = params.up;
+    // Blender Z-up to Three.js Y-up: (x, y, z)_b -> (x, z, -y)_t
+    this.camera.position.set(bx, bz, -by);
+    this.controls.target.set(tx, tz, -ty);
+    // Three.js OrbitControls uses camera.up; for full up vector control we'd
+    // need to compute a lookAt matrix manually. For now set the up vector.
+    this.camera.up.set(ux, uz, -uy);
+    this.camera.fov = params.fov_deg;
+    this.camera.near = 0.01;
+    this.camera.far = 1000;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+  }
+
   /** Reset camera to default framing of the bounding sphere. */
   reset(sphere: THREE.Sphere): void {
     this.fitToBoundingSphere(sphere);

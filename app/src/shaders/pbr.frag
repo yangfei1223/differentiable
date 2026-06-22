@@ -60,6 +60,7 @@ void main() {
 
   // ===== 5. Specular =====
   float specLod = roughness * uMaxEnvMip;
+  // Use specLod for prefiltered, matching Python env_map.sample_specular().
   vec3 prefiltered = textureLod(uEnvMap, direction_to_uv(R), specLod).rgb;
 
   vec2 brdfUv = (vec2(NdotV, roughness) * (uBRDFLutSize - 1.0) + 0.5) / uBRDFLutSize;
@@ -87,6 +88,24 @@ void main() {
   if (uDebug == 12) { fragColor = vec4(textureLod(uEnvMap, vec2(0.5, 0.5), 0.0).rgb, 1.0); return; }
   if (uDebug == 13) { fragColor = vec4(textureLod(uEnvMap, vec2(0.5, 0.5), uMaxEnvMip).rgb, 1.0); return; }
   if (uDebug == 14) { fragColor = vec4(textureLod(uEnvMap, vUV, 0.0).rgb, 1.0); return; }
+
+  // ===== SHADER PROBE: show specLod and NdotV values =====
+  // 15: specLod (normalized to [0,1] for visualization)
+  // 16: NdotV
+  // 17: roughness
+  // 18: env at vUV, mip = specLod (the actual specular mip used)
+  // 19: env at vUV, mip 5 (control: should be moderate blur)
+  if (uDebug == 15) { fragColor = vec4(vec3(roughness * uMaxEnvMip / max(uMaxEnvMip, 1.0)), 1.0); return; }
+  if (uDebug == 16) { fragColor = vec4(vec3(NdotV), 1.0); return; }
+  if (uDebug == 17) { fragColor = vec4(vec3(roughness), 1.0); return; }
+  if (uDebug == 18) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), roughness * uMaxEnvMip).rgb, 1.0); return; }
+  if (uDebug == 19) { fragColor = vec4(textureLod(uEnvMap, direction_to_uv(R), 5.0).rgb, 1.0); return; }
+  // 20: R direction visualization
+  // 21: env at fixed uv=(0.75, 0.3) (typical "warm" region) mip 0
+  // 22: env at fixed uv=(0.25, 0.7) (typical "cool" region) mip 0
+  if (uDebug == 20) { fragColor = vec4(R * 0.5 + 0.5, 1.0); return; }
+  if (uDebug == 21) { fragColor = vec4(textureLod(uEnvMap, vec2(0.75, 0.3), 0.0).rgb, 1.0); return; }
+  if (uDebug == 22) { fragColor = vec4(textureLod(uEnvMap, vec2(0.25, 0.7), 0.0).rgb, 1.0); return; }
 
   // ===== Final: apply linear -> sRGB encoding (mirror Python pbr_logger.py:162) =====
   // Python training saves rendered debug PNG as: rgb.clamp(0,1).pow(1/2.2) * 255

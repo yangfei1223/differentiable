@@ -77,22 +77,37 @@ export class Environment {
 
 /**
  * Load an HDR (.hdr RGBE) env map. Returns a DataTexture in linear space.
+ *
+ * Uses FloatType (RGBA32F). WebGL2's auto-generateMipmap is unreliable for
+ * float textures across drivers, so we manually build the mip chain in JS
+ * (box-filter average) and assign to texture.mipmaps. This guarantees the
+ * mipmap pyramid has the correct HDR-aware color values that match Python's
+ * nvdiffrast linear-mipmap-linear sampling.
  */
 function loadHdrEnvMap(url: string): Promise<THREE.Texture> {
   return new Promise((resolve, reject) => {
     const loader = new RGBELoader();
-    loader.setDataType(THREE.HalfFloatType); // efficient for sampling
+    loader.setDataType(THREE.FloatType); // RGBA32F
     loader.load(
       url,
       (texture) => {
-        texture.generateMipmaps = true;
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.magFilter = THREE.LinearFilter;
         texture.wrapS = THREE.RepeatWrapping; // equirect wraps horizontally
-        texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.RepeatWrapping; // match Python nvdiffrast boundary_mode="wrap"
         // RGBELoader produces linear data already; ensure colorSpace is NoColorSpace
         // so Three.js doesn't apply any further sRGB decode.
         texture.colorSpace = THREE.NoColorSpace;
+
+        // Manually build mipmap chain (box filter) — WebGL's auto-glGenerateMipmap
+        // is unreliable for RGBA32F across drivers.
+        const mipmaps = buildFloatMipmapChain(texture.image.data as unknown as Float32Array, texture.image.width, texture.image.height);
+        texture.mipmaps = mipmaps.map((data, i) => ({
+          data,
+          width: Math.max(1, texture.image.width >> i),
+          height: Math.max(1, texture.image.height >> i),
+        }));
+        texture.generateMipmaps = false; // we provide mipmaps manually
         texture.needsUpdate = true;
         resolve(texture);
       },
@@ -100,6 +115,57 @@ function loadHdrEnvMap(url: string): Promise<THREE.Texture> {
       (err) => reject(new Error(`Failed to load HDR env map ${url}: ${err}`)),
     );
   });
+}
+
+/**
+ * Build a box-filtered mipmap chain for a FloatType RGBA texture.
+ * Returns array of Float32Array: [mip0_data, mip1_data, ...]
+ * where mip0 is the original image and each subsequent entry is half the
+ * resolution of the previous (averaging 2x2 blocks).
+ *
+ * Wrapping is REPEAT in both dimensions (matches env_map.py boundary_mode="wrap").
+ */
+function buildFloatMipmapChain(
+  data: Float32Array,
+  width: number,
+  height: number,
+): Float32Array[] {
+  const chain: Float32Array[] = [data];
+  let w = width;
+  let h = height;
+  let current = data;
+  while (w > 1 && h > 1) {
+    const nw = Math.max(1, w >> 1);
+    const nh = Math.max(1, h >> 1);
+    const next = new Float32Array(nw * nh * 4);
+    for (let y = 0; y < nh; y++) {
+      for (let x = 0; x < nw; x++) {
+        // Average 2x2 block from current level (with REPEAT wrap)
+        let r = 0, g = 0, b = 0, a = 0;
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const sx = (x * 2 + dx) % w;
+            const sy = (y * 2 + dy) % h;
+            const idx = (sy * w + sx) * 4;
+            r += current[idx];
+            g += current[idx + 1];
+            b += current[idx + 2];
+            a += current[idx + 3];
+          }
+        }
+        const o = (y * nw + x) * 4;
+        next[o] = r / 4;
+        next[o + 1] = g / 4;
+        next[o + 2] = b / 4;
+        next[o + 3] = a / 4;
+      }
+    }
+    chain.push(next);
+    current = next;
+    w = nw;
+    h = nh;
+  }
+  return chain;
 }
 
 /**
@@ -122,7 +188,7 @@ function loadTexture(
           : THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
         texture.wrapS = THREE.RepeatWrapping; // equirect wraps horizontally
-        texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.RepeatWrapping; // match Python nvdiffrast boundary_mode="wrap"
         texture.needsUpdate = true;
         resolve(texture);
       },
