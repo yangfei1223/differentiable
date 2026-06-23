@@ -48,6 +48,46 @@ scene.zip
 | 缩放 | 滚轮 | 双指捏合 |
 | 复位 | `R` 键 | — |
 
+## 项目结构
+
+```
+app/
+├── index.html                  # 入口 HTML
+├── package.json                # 依赖与 npm scripts
+├── vite.config.ts              # Vite 配置
+├── tsconfig.json               # TypeScript 配置
+├── src/
+│   ├── main.ts                 # 入口，实例化 App
+│   ├── app/
+│   │   ├── App.ts              # 应用编排：场景加载、相机覆盖、离屏渲染、动画循环
+│   │   └── SceneLoader.ts      # .zip 解包、manifest 解析、blob URL 管理
+│   ├── render/
+│   │   ├── PBRPipeline.ts      # 渲染器、glTF 加载、node→mesh 映射、tangent 计算
+│   │   ├── PBRMesh.ts          # 单 primitive 的 PBR ShaderMaterial 封装
+│   │   ├── Environment.ts      # env map（HDR/LDR）+ BRDF LUT 加载、mipmap 链
+│   │   └── computeTangents.ts  # JS Mikktspace 切线计算（镜像 mesh.py:78-141）
+│   ├── shaders/                # GLSL（移植参考，无 Three.js 依赖）
+│   │   ├── common.glsl         # PI 常量 + direction_to_uv()
+│   │   ├── pbr.vert            # 顶点着色器
+│   │   └── pbr.frag            # 片段着色器（split-sum PBR + debug 通道）
+│   ├── ui/
+│   │   ├── CameraControls.ts   # OrbitControls + Blender Z-up→Y-up 转换
+│   │   ├── LoadingOverlay.ts   # 加载状态 UI
+│   │   ├── PerfStats.ts        # FPS / draw call 统计
+│   │   └── ScenePicker.ts      # 场景选择 / 拖拽
+│   ├── math/
+│   │   └── pbr_math.ts         # PBR 数学的 TS 镜像（供单测用）
+│   ├── types/
+│   │   └── manifest.ts         # manifest.json 的 TS 类型
+│   └── vite/
+│       ├── glsl-plugin.ts      # Vite 插件：#include 解析 + ?raw 加载
+│       └── raw.d.ts            # ?raw 导入的 TS 声明
+├── tests/
+│   └── equivalence.test.ts     # GLSL 数学 vs Python pbr_model.py 等价性
+├── reports/                    # AB 验证报告（markdown）
+└── resource/                   # 报告配套图片资源
+```
+
 ## GLSL 文件（移植参考）
 
 PBR 数学全部在 `src/shaders/`：
