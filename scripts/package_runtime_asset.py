@@ -35,6 +35,7 @@ def build_manifest(
     epoch: int,
     psnr_db: float | None = None,
     is_hdr: bool = False,
+    material_textures_flip_y: bool = True,
 ) -> dict:
     """Build the manifest.json dictionary.
 
@@ -47,6 +48,10 @@ def build_manifest(
         epoch: Training epoch this asset was baked at.
         psnr_db: Optional training PSNR in dB.
         is_hdr: Whether env map is HDR-encoded (currently always False).
+        material_textures_flip_y: Whether to flip material textures on Y axis
+            during GPU upload. True (default) for GLBs authored with V=0 at
+            bottom (OpenGL); False for GLBs authored with V=0 at top
+            (image-data, e.g., Sketchfab exports).
 
     Returns:
         Manifest dict conforming to schema_version 1.
@@ -77,6 +82,7 @@ def build_manifest(
             {**sm, "match_by": sm.get("match_by", "primitive_name")}
             for sm in submeshes
         ],
+        "material_textures_flip_y": bool(material_textures_flip_y),
     }
 
 
@@ -149,6 +155,65 @@ def _build_submesh_entry(name: str, tex_dir: Path, textures_prefix: str) -> dict
         "match_by": "primitive_name",
         "textures": textures,
     }
+
+
+def detect_material_textures_flip_y(glb_path: str) -> bool:
+    """Detect whether material textures should be flipped on Y during GPU upload.
+
+    Strategy: inspect TEXCOORD_0 V range across all primitives.
+    - If V is mostly in [0, 1]: GLB was authored with V=0 at top (image-data
+      convention, common for Sketchfab exports like the piano). Web Viewer
+      needs flipY=False to preserve nvdiffrast's raw texture layout.
+    - If V is mostly in [1, 2] (or otherwise offset by ~1): GLB was authored
+      with V=0 at bottom (OpenGL convention, e.g., KHR DAMAGED_HELMET). Web
+      Viewer needs flipY=True (Three.js default).
+
+    Args:
+        glb_path: Path to .glb file.
+
+    Returns:
+        True if flipY should be enabled, False otherwise.
+    """
+    import json as json_mod
+    import numpy as np
+
+    with open(glb_path, "rb") as f:
+        f.read(12)  # magic/version/length
+        chunk_length = int.from_bytes(f.read(4), "little")
+        f.read(4)  # chunk type
+        json_data = json_mod.loads(f.read(chunk_length).decode("utf-8"))
+        bin_len = int.from_bytes(f.read(4), "little")
+        f.read(4)
+        bin_data = f.read(bin_len)
+
+    accessors = json_data.get("accessors", [])
+    buffer_views = json_data.get("bufferViews", [])
+
+    # Collect V values from TEXCOORD_0 of every primitive
+    all_v_values: list[float] = []
+    for mesh in json_data.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            texcoord_0 = prim.get("attributes", {}).get("TEXCOORD_0")
+            if texcoord_0 is None:
+                continue
+            acc = accessors[texcoord_0]
+            bv = buffer_views[acc["bufferView"]]
+            offset = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+            count = acc["count"]
+            arr = np.frombuffer(bin_data, dtype=np.float32, count=count * 2, offset=offset).reshape(count, 2)
+            all_v_values.extend(arr[:, 1].tolist())
+
+    if not all_v_values:
+        # No UVs — default to OpenGL convention
+        return True
+
+    v_arr = np.array(all_v_values)
+    v_mean = float(v_arr.mean())
+    # Heuristic: if mean V is in [0.5, 1.5], it's [0,1]-style → flipY=False.
+    # If mean V is in [1.5, 2.5], it's [1,2]-style (OpenGL offset) → flipY=True.
+    flip_y = v_mean >= 1.5
+    print(f"  [INFO] UV V mean={v_mean:.3f} min={v_arr.min():.3f} max={v_arr.max():.3f} → flipY={flip_y}")
+    return flip_y
 
 
 def extract_glb_submesh_names(glb_path: str) -> list[str]:
@@ -329,6 +394,9 @@ def package_asset(
     else:
         raise FileNotFoundError(f"Missing both brdf_lut.pt and brdf_lut.png in {epoch_dir}")
 
+    # Detect material texture flipY from GLB UV layout
+    material_textures_flip_y = detect_material_textures_flip_y(glb_path)
+
     # Build manifest
     manifest = build_manifest(
         scene_name=scene_name,
@@ -339,6 +407,7 @@ def package_asset(
         epoch=epoch,
         psnr_db=psnr_db,
         is_hdr=env_map_is_hdr,
+        material_textures_flip_y=material_textures_flip_y,
     )
 
     # Build the zip

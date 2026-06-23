@@ -19,11 +19,13 @@ export class PBRMesh {
     textureUrls: SubmeshTextures,
     env: Environment,
     brdfLutSize: number,
+    flipY: boolean,
   ): Promise<PBRMesh> {
     const material = await PBRMesh.buildMaterial(
       textureUrls,
       env,
       brdfLutSize,
+      flipY,
     );
 
     // Replace the primitive's material with our PBR material
@@ -36,16 +38,23 @@ export class PBRMesh {
     textureUrls: SubmeshTextures,
     env: Environment,
     brdfLutSize: number,
+    flipY: boolean,
   ): Promise<THREE.ShaderMaterial> {
     const [baseColor, roughness, metallic, normalMap] = await Promise.all([
-      loadMaterialTexture(textureUrls.base_color, THREE.SRGBColorSpace),
-      loadMaterialTexture(textureUrls.roughness, THREE.LinearSRGBColorSpace),
-      loadMaterialTexture(textureUrls.metallic, THREE.LinearSRGBColorSpace),
-      loadMaterialTexture(textureUrls.normal_map, THREE.LinearSRGBColorSpace),
+      loadMaterialTexture(textureUrls.base_color, THREE.SRGBColorSpace, flipY),
+      loadMaterialTexture(textureUrls.roughness, THREE.LinearSRGBColorSpace, flipY),
+      loadMaterialTexture(textureUrls.metallic, THREE.LinearSRGBColorSpace, flipY),
+      loadMaterialTexture(textureUrls.normal_map, THREE.LinearSRGBColorSpace, flipY),
     ]);
 
     return new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
+      // Match Python nvdiffrast (no culling) + glTF doubleSided materials.
+      // Many piano meshes (keys, frame) have faces whose visible side has
+      // a normal pointing away from camera; FrontSide culling would drop
+      // them, making the mesh appear partly empty. DoubleSide renders both
+      // sides so all visible surfaces show up — matching Python training.
+      side: THREE.DoubleSide,
       // Disable Three.js auto-injection of tonemapping/colorspace chunks —
       // our pbr.frag writes final linear color directly; Three.js post-processing
       // (outputColorSpace=SRGB) will handle linear→sRGB at the renderer level.
@@ -90,6 +99,7 @@ export class PBRMesh {
 async function loadMaterialTexture(
   url: string,
   colorSpace: THREE.ColorSpace,
+  flipY: boolean,
 ): Promise<THREE.Texture> {
   return new Promise((resolve, reject) => {
     const loader = new THREE.TextureLoader();
@@ -97,12 +107,21 @@ async function loadMaterialTexture(
       url,
       (texture) => {
         texture.colorSpace = colorSpace;
+        // Match Python training: dr.texture(..., boundary_mode="clamp").
+        // UVs are already in [0,1] so this rarely matters, but ClampToEdge
+        // guarantees edge behavior parity for any UVs slightly outside.
+        texture.wrapS = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
         texture.generateMipmaps = true;
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.magFilter = THREE.LinearFilter;
-        // RepeatWrapping so fract(uv) in shader + any minor overflow samples correctly
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
+        // flipY controls whether the image is flipped on GPU upload.
+        // - true (default, OpenGL): texture row 0 = bottom; matches GL UV convention.
+        // - false: texture row 0 = top; matches nvdiffrast raw tensor data layout.
+        // Scenes whose source GLB was authored with V=0 at top (e.g., piano)
+        // require false; scenes authored with V=0 at bottom (e.g., helmet)
+        // require true. Driven by manifest.material_textures_flip_y.
+        texture.flipY = flipY;
         texture.needsUpdate = true;
         resolve(texture);
       },

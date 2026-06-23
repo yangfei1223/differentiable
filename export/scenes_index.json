@@ -8,7 +8,7 @@
   {
     "name": "piano",
     "file": "/scenes/piano_pbr.zip",
-    "psnr_db": 28.8,
+    "psnr_db": null,
     "epoch": 2000
   }
 ]

@@ -62,13 +62,25 @@ export class PBRPipeline {
     // CRITICAL: Three.js GLTFLoader assigns obj.name = NODE name, but Python's
     // packaging extracts submesh names from MESH name (src/gltf_loader.py:128).
     // Without this remapping, primitive_name matching fails silently.
+    //
+    // Two problems this handles:
+    //  (1) obj.name = node.name, but manifest expects mesh.name
+    //      → build node.name → mesh.name lookup.
+    //  (2) Sketchfab-style deep nesting (e.g., piano original_with_mats.glb):
+    //      mesh-bearing node.name = "Object_7" but mesh.name = "Object_0".
+    //      Three.js's obj may sit anywhere in the chain, so we walk UP from
+    //      obj looking for the first ancestor whose name matches either the
+    //      node-name map or a direct mesh-name.
     const gltfJson = ((gltf as any).parser?.json ?? {}) as {
       meshes?: Array<{ name?: string }>;
       nodes?: Array<{ name?: string; mesh?: number }>;
     };
     const meshNameByIndex = new Map<number, string>();
+    const meshNameSet = new Set<string>();
     (gltfJson.meshes ?? []).forEach((m, i) => {
-      meshNameByIndex.set(i, m.name ?? `mesh_${i}`);
+      const name = m.name ?? `mesh_${i}`;
+      meshNameByIndex.set(i, name);
+      meshNameSet.add(name);
     });
     // Build: node.name → mesh.name (resolved via nodes[].mesh index)
     const nodeNameToMeshName = new Map<string, string>();
@@ -83,6 +95,9 @@ export class PBRPipeline {
     const pbrMeshes: PBRMesh[] = [];
 
     gltf.scene.updateMatrixWorld(true);
+
+    // Per-package texture flip flag (default true = OpenGL convention; piano needs false)
+    const flipY = bundle.manifest.material_textures_flip_y ?? true;
 
     // Build lookup maps for the three match_by strategies.
     // byPrimitiveName resolves the REAL glTF mesh name (not node name).
@@ -101,17 +116,37 @@ export class PBRPipeline {
         console.log(`[PBRPipeline] Computed tangents for mesh ${meshIdx}: ${obj.geometry.attributes.tangent.count} vertices`);
       }
 
-      // Resolve real glTF mesh name by walking up to the top-level node,
-      // then mapping node.name → mesh.name via our precomputed lookup.
-      let topoParent: THREE.Object3D = obj;
-      while (topoParent.parent && topoParent.parent !== gltf.scene) {
-        topoParent = topoParent.parent;
+      // Resolve real glTF mesh name. Walk UP the parent chain from obj,
+      // returning the first ancestor (including obj itself) whose name is
+      // either a known mesh.name (direct hit) or a known node.name (mapped
+      // to its mesh.name). This handles both shallow scenes (helmet:
+      // single mesh node) and Sketchfab-style deep nesting (piano: 7-layer
+      // wrapper around mesh-bearing nodes whose names differ from mesh.name).
+      let resolvedMeshName: string | undefined;
+      const walkedNames: string[] = [];
+      let cursor: THREE.Object3D | null = obj;
+      while (cursor && cursor !== gltf.scene) {
+        walkedNames.push(cursor.name);
+        if (meshNameSet.has(cursor.name)) {
+          resolvedMeshName = cursor.name;
+          break;
+        }
+        const mapped = nodeNameToMeshName.get(cursor.name);
+        if (mapped) {
+          resolvedMeshName = mapped;
+          break;
+        }
+        cursor = cursor.parent;
       }
-      let resolvedMeshName = topoParent.name || `mesh_${meshIdx}`;
-      if (nodeNameToMeshName.has(topoParent.name)) {
-        resolvedMeshName = nodeNameToMeshName.get(topoParent.name)!;
+      if (!resolvedMeshName) {
+        // Fallback: topological parent name (kept for safety on weird scenes).
+        let topoParent: THREE.Object3D = obj;
+        while (topoParent.parent && topoParent.parent !== gltf.scene) {
+          topoParent = topoParent.parent;
+        }
+        resolvedMeshName = topoParent.name || `mesh_${meshIdx}`;
       }
-      console.log(`[PBRPipeline] primitive #${meshIdx}: obj.name="${obj.name}" topoParent.name="${topoParent.name}" → resolvedMeshName="${resolvedMeshName}"`);
+      console.log(`[PBRPipeline] primitive #${meshIdx}: obj.name="${obj.name}" walked=[${walkedNames.join(' > ')}] → resolvedMeshName="${resolvedMeshName}"`);
 
       if (!byPrimitiveName.has(resolvedMeshName)) byPrimitiveName.set(resolvedMeshName, []);
       byPrimitiveName.get(resolvedMeshName)!.push(obj);
@@ -169,6 +204,7 @@ export class PBRPipeline {
           textureUrls,
           this.currentEnv,
           brdfLutSize,
+          flipY,
         );
         pbrMeshes.push(pbrMesh);
       }

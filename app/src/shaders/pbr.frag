@@ -55,9 +55,11 @@ void main() {
   // ===== 4. F0 + Diffuse =====
   vec3 F0 = mix(vec3(0.04), baseColor, metallic);
   vec3 kd = (1.0 - metallic) * (1.0 - F0);
-  // Use texture() with bias for BOTH diffuse and specular to match nvdiffrast's
-  // mip_level_bias behavior (bias added to auto-LOD from UV derivatives).
-  vec3 irradiance = texture(uEnvMap, direction_to_uv(N), uDiffuseMipBias).rgb;
+  // Python sample_diffuse(): mip_level = max_mip (absolute, 1x1 average).
+  // GLSL texture(s, uv, bias) adds bias to auto-LOD which can give a different
+  // effective mip than max_mip. Use textureLod with absolute LOD = uMaxEnvMip
+  // to guarantee we sample the most-blurred mip (global average of env map).
+  vec3 irradiance = textureLod(uEnvMap, direction_to_uv(N), uMaxEnvMip).rgb;
   vec3 diffuse = kd * baseColor * irradiance;
 
   // ===== 5. Specular =====

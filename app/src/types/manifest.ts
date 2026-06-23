@@ -48,6 +48,20 @@ export interface Manifest {
   environment: ManifestEnvironment;
   brdf_lut_path: string;
   submeshes: SubmeshEntry[];
+  /**
+   * Whether to flip material textures (base_color/roughness/metallic/normal_map)
+   * along Y axis during GPU upload. Mirrors Three.js Texture.flipY.
+   *
+   * - true (default): texture image row 0 = bottom after upload (OpenGL convention).
+   *   Used when the source GLB's UV was authored with V=0 at bottom
+   *   (e.g., helmet: original UV V in [1,2], fract() maps to standard GL).
+   * - false: texture image row 0 = top after upload (matches nvdiffrast raw data).
+   *   Used when the source GLB's UV was authored with V=0 at top
+   *   (e.g., piano: original UV V in [0,1], image-data convention).
+   *
+   * Optional; older manifests without this field default to true.
+   */
+  material_textures_flip_y?: boolean;
 }
 
 export interface SceneIndexEntry {
