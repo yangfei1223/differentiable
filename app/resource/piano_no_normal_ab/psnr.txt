@@ -1,0 +1,4 @@
+cam0: PSNR(overlap)=18.48 dB, overlap=37.8%
+cam50: PSNR(overlap)=25.99 dB, overlap=34.8%
+cam100: PSNR(overlap)=24.31 dB, overlap=32.4%
+cam150: PSNR(overlap)=19.58 dB, overlap=32.8%
