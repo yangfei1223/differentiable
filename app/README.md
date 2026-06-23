@@ -1,37 +1,34 @@
 # PBR Web Viewer
 
-WebGL2 viewer for verifying differentiable baker PBR outputs. Loads `.zip` asset bundles packed by `scripts/package_runtime_asset.py` and renders them with GLSL shaders that mirror the training-time PBR math (`src/shading/pbr_model.py`).
+WebGL2 viewer，用于验证可微烘焙管线的 PBR 输出。加载 `scripts/package_runtime_asset.py` 打包的 `.zip` 资产，用 GLSL 着色器渲染，着色数学严格对齐训练管线（`src/shading/pbr_model.py`）。
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Pack a training output (from project root)
+# 从项目根目录打包一个训练输出
 python -m scripts.package_runtime_asset \
   --glb data/helmet_260604/scene/lowpoly.glb \
-  --epoch-dir output/helmet_260604_pbr/epoch2000 \
-  --scene-name helmet \
-  --psnr 20.81
+  --epoch-dir output/helmet_no_normal/epoch2000 \
+  --scene-name helmet
 
-# Start the dev server
+# 启动 dev server
 cd app
 npm install
 npm run dev
 ```
 
-Browser opens to `http://localhost:5173`. The helmet scene loads automatically.
+浏览器打开 `http://localhost:5173`，自动加载 helmet 场景。
 
-## Asset Bundle Format
+## 资产包格式
 
-See `docs/superpowers/specs/2026-06-17-pbr-web-viewer-design.md` §3 for the full spec.
-
-Minimum required structure:
+完整规范见 `docs/superpowers/specs/2026-06-17-pbr-web-viewer-design.md` §3。最小目录结构：
 
 ```
 scene.zip
 ├── manifest.json
 ├── geometry/scene.glb
 ├── textures/
-│   ├── env_map.png
+│   ├── env_map.png       # 或 env_map.hdr（RGBE，保留训练时 HDR 值）
 │   ├── brdf_lut.png
 │   └── {submesh_name}/
 │       ├── base_color.png
@@ -40,88 +37,88 @@ scene.zip
 │       └── normal_map.png
 ```
 
-You can also drag-drop any valid `.zip` onto the browser window.
+也支持把 `.zip` 文件直接拖到浏览器窗口加载。
 
-## Controls
+## 操作
 
-| Action | Desktop | Mobile |
-|---|---|---|
-| Rotate | Left-drag | One-finger drag |
-| Pan | Right-drag | Two-finger drag |
-| Zoom | Scroll | Pinch |
-| Reset | `R` key | — |
+| 操作 | 桌面 | 移动端 |
+|------|------|--------|
+| 旋转 | 左键拖动 | 单指拖动 |
+| 平移 | 右键拖动 | 双指拖动 |
+| 缩放 | 滚轮 | 双指捏合 |
+| 复位 | `R` 键 | — |
 
-## GLSL Files (Porting Reference)
+## GLSL 文件（移植参考）
 
-All PBR math lives in `src/shaders/`:
+PBR 数学全部在 `src/shaders/`：
 
-- `common.glsl` — `PI` constant + `direction_to_uv()` helper
-- `pbr.vert` — vertex transform, world-space normal/tangent/view outputs
-- `pbr.frag` — fragment shader with all split-sum PBR math
+- `common.glsl` — `PI` 常量 + `direction_to_uv()` 辅助函数
+- `pbr.vert` — 顶点变换，输出世界空间 normal/tangent/view
+- `pbr.frag` — 片段着色器，包含完整 split-sum PBR 数学
 
-These files have **no Three.js dependencies** and can be copied directly to a native engine (Vulkan/Metal/GLES) with minimal changes.
+这些文件**不依赖 Three.js**，可直接复制到原生引擎（Vulkan/Metal/GLES），改动很小。
 
-### Uniforms Contract
+### Uniforms 契约
 
-The fragment shader expects:
+片段着色器期望的 uniforms：
 
-| Uniform | Type | Description |
-|---|---|---|
-| `uBaseColor` | sampler2D | sRGB base color texture |
-| `uRoughness` | sampler2D | Linear roughness (R channel) |
-| `uMetallic` | sampler2D | Linear metallic (R channel) |
+| Uniform | 类型 | 说明 |
+|---------|------|------|
+| `uBaseColor` | sampler2D | sRGB base color 贴图 |
+| `uRoughness` | sampler2D | Linear roughness（R 通道） |
+| `uMetallic` | sampler2D | Linear metallic（R 通道） |
 | `uNormalMap` | sampler2D | Tangent-space normal map |
-| `uEnvMap` | sampler2D | Equirectangular env map (with mipmaps) |
-| `uBRDFLut` | sampler2D | 2-channel GGX BRDF integration LUT |
+| `uEnvMap` | sampler2D | Equirect 环境贴图（含 mipmap） |
+| `uBRDFLut` | sampler2D | 双通道 GGX BRDF 积分 LUT |
 | `uMaxEnvMip` | float | `floor(log2(max(envH, envW)))` |
-| `uDiffuseMipBias` | float | Equals `uMaxEnvMip` |
-| `uNormalMapEnabled` | bool | Toggle normal mapping |
-| `uBRDFLutSize` | vec2 | LUT resolution (e.g. 256×256) |
+| `uDiffuseMipBias` | float | 等于 `uMaxEnvMip` |
+| `uNormalMapEnabled` | bool | 是否启用法线贴图 |
+| `uBRDFLutSize` | vec2 | LUT 分辨率（如 256×256） |
 
-## Development
+## 开发
 
 ```bash
-npm run test      # Vitest unit tests (math equivalence)
-npm run build     # Production build to dist/
-npm run preview   # Preview production build
+npm run test      # vitest 单元测试（数学等价性）
+npm run build     # 生产构建到 dist/
+npm run preview   # 预览生产构建
 ```
 
-## Testing Equivalence
+## 等价性测试
 
-The unit tests in `tests/equivalence.test.ts` mirror the GLSL math in TypeScript to verify numerical equivalence with Python's `src/shading/pbr_model.py`. Run them after any shader change.
+`tests/equivalence.test.ts` 在 TypeScript 里镜像 GLSL 数学，验证与 Python `src/shading/pbr_model.py` 的数值等价性。改完 shader 后跑一遍。
 
-### AB Pixel Comparison
+### AB 像素对比
 
-For end-to-end validation against the training pipeline's reference render:
+与训练管线 GT 端到端对比：
 
-1. Pack an asset from a training output:
+1. 从训练输出打包资产：
    ```bash
    python -m scripts.package_runtime_asset \
      --glb data/helmet_260604/scene/lowpoly.glb \
      --epoch-dir output/helmet_no_normal/epoch2000 \
      --scene-name helmet
    ```
-2. Run the dev server, load with a camera hash from `data/helmet_260604/cameras.json`:
+2. 启动 dev server，加载相机 hash（参数从 `data/helmet_260604/cameras.json` 取）：
    ```
    http://localhost:5173/#cam=px,py,pz,tx,ty,tz,ux,uy,uz,fov
    ```
-3. Capture a 1024×1024 render via the `?render=1024` query (auto-downloads PNG), or use `window.__pipeline` in the console to drive `setSize` + `render` + `readPixels` directly.
-4. Compare against the top-right ("Rendered") panel of `output/{scene}_no_normal/epoch2000/compare_NNNN.png`:
+3. 离屏渲染 1024×1024：URL 加 `?render=1024` 自动下载 PNG；或在 console 手动驱动 `window.__pipeline.setSize(1024,1024); .render(); readPixels; toDataURL`。
+4. 与 `output/{scene}_no_normal/epoch2000/compare_NNNN.png` 的右上"Rendered"面板对比：
    ```bash
    python scripts/ab_compare.py helmet
    ```
 
-GT panel layout in `compare_*.png` (from `src/shading/pbr_logger.py`):
+GT 面板布局（来自 `src/shading/pbr_logger.py`）：
 
 ```
 ┌───────────┬───────────┐
-│   GT      │ Rendered  │   ← top row
+│   GT      │ Rendered  │   ← 上行
 ├───────────┼───────────┤
-│ Diffuse   │ Specular  │   ← bottom row
+│ Diffuse   │ Specular  │   ← 下行
 └───────────┴───────────┘
 ```
 
-Each panel is gamma-2.2 encoded (`pbr_logger.py:162`).
+每个面板经过 `pow(1/2.2)` gamma 编码（`pbr_logger.py:162`）。
 
 ## 验证报告
 
