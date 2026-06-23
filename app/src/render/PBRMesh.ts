@@ -61,7 +61,11 @@ export class PBRMesh {
         uBRDFLut: { value: env.brdfLut },
         uMaxEnvMip: { value: env.maxEnvMip },
         uDiffuseMipBias: { value: env.diffuseMipBias },
-        uNormalMapEnabled: { value: true }, // re-enable normal map
+        // Match Python training's GT/video rendering: always skips normal mapping
+        // because pbr_logger._export_compare (line 90) and video.py (line 221) call
+        // shade() WITHOUT tangents/bitangents → pbr_model.py:78 condition fails.
+        // Normal map is only used during training forward (trainer.py:545).
+        uNormalMapEnabled: { value: false },
         uBRDFLutSize: { value: new THREE.Vector2(brdfLutSize, brdfLutSize) },
         uDebug: { value: 0 },
       },
