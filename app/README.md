@@ -123,37 +123,18 @@ GT panel layout in `compare_*.png` (from `src/shading/pbr_logger.py`):
 
 Each panel is gamma-2.2 encoded (`pbr_logger.py:162`).
 
-## Helmet Validation Results (2026-06-23)
+## 验证报告
 
-**Data source**: `output/helmet_no_normal/epoch2000` (single-mesh, `disable_normal_map=True`).
+Web 渲染与训练管线 GT 的 AB 像素对比。报告在 `app/reports/`，图片资源在 `app/resource/`（与主仓 `docs/reports/` + `resource/` 约定一致）。
 
-**Shader setting**: `uNormalMapEnabled = false` in `PBRMesh.ts`. The Python training pipeline skips normal mapping in its compare/video export paths (`pbr_logger._export_compare` calls `model.shade()` without tangents, and `pbr_model.py:78` requires both `not disable_normal_map` AND non-null tangents), so the Web viewer must match that behavior regardless of what the `normal_map.png` file contains.
+| 场景 | 数据源 | PSNR | 状态 | 报告 |
+|------|--------|------|------|------|
+| 头盔 | `helmet_no_normal/epoch2000` | 17.47 dB | 视觉对齐通过（前景均值偏差 ≤3 RGB，边缘密度一致）；PSNR 未达 30 dB 目标，主因是 specular LOD 语义不一致 | [Helmet AB no_normal](reports/01_Helmet_AB_no_normal.md) |
 
-**AB stats at camera[50]** (compare_0001, viewport ~56% foreground):
+## 遗留问题
 
-| Metric | Value |
-|---|---|
-| PSNR (overlap foreground) | **17.47 dB** |
-| RMSE | 34.10 |
-| Web fg-mean RGB | [146, 143, 129] |
-| GT fg-mean RGB | [148, 146, 134] |
-| Mean diff (Web − GT) | [−1, −2, −5] |
-| Edge density (Sobel >50, fg) | Web 19.58% vs GT 19.61% |
-
-**Interpretation**: per-pixel difference is large (low PSNR), but aggregate statistics are nearly identical — overall color, brightness, foreground coverage, and edge density all match within 1–3%. Visual inspection of side-by-side `helmet_compare_cam{0,50,100,150}.png` confirms framing, silhouette, diffuse highlight position, and edge fragmentation are all aligned. The remaining per-pixel error is concentrated in sub-pixel silhouette misalignment and specular highlight shape, not in the shading model itself.
-
-## Known Issues / TODO
-
-- **Specular LOD semantics mismatch (likely root cause of remaining per-pixel error)**.
-  `pbr.frag:76` uses `textureLod(uEnvMap, uv, specLod)` (absolute LOD, skips screen-space derivatives), but Python's `env_map.sample_specular` passes `mip_level_bias` to nvdiffrast (relative bias added to auto-LOD from UV derivatives). On curved surfaces the auto-LOD contribution is non-trivial. Switching to `texture(uEnvMap, uv, specLod)` (bias mode, matching `pbr.frag:60` for diffuse) should close most of the gap. Symptom: Web specular highlights are slightly more blurred and brighter than GT.
-
-- **BRDF LUT UV mapping may not match Python's `grid_sample(align_corners=True)`**.
-  `pbr.frag:78` uses `(val*(size−1)+0.5)/size` (pixel-center/`align_corners=False` semantics), Python `brdf_lut.py:120` uses `grid_sample(..., align_corners=True)` with `grid ∈ [0,1]`. These are not equivalent at the boundaries. Needs verification with a unit test before changing either side.
-
-- **baseColor gamma encoding**: Python export uses `pow(1/2.2)` (`pbr_model.py:259`); Web relies on Three.js `SRGBColorSpace` auto-decode, which uses the true sRGB EOTF. The two curves differ by ~1–5% in the midtones. Acceptable for now.
-
-- **Diffuse channel skews slightly cooler/darker than GT** in side-by-side (`helmet_compare_diffuse_cam50.png`). Cause not yet isolated — possibly related to the env map mip bias or to the baseColor sRGB curve above.
-
-- **Piano scene not yet re-validated** under the no_normal data source. The `piano_pbr.zip` in `export/scenes/` is still the `_pbr` (normal-mapped) version; needs repacking from `output/piano_no_normal/epoch2000/` and an AB run before this tag can claim dual-scene support.
-
-- **Debug scaffolding in `pbr.frag`** (28 debug channels, `uDebug` uniform, HUD overlay in `App.ts`) is still in the shader. Should be cleaned up once the specular LOD fix lands.
+- **Specular LOD 语义不一致**（helmet 像素误差主因）。`pbr.frag:76` 用 `textureLod`（绝对 LOD），Python `env_map.sample_specular` 用 nvdiffrast `mip_level_bias`（相对偏置）。改为 `texture(uEnvMap, uv, specLod)`（与 `pbr.frag:60` diffuse 一致）。
+- **BRDF LUT UV 映射**可能与 Python `grid_sample(align_corners=True)` 不等价，需单测验证。
+- **baseColor gamma 曲线**：Python 导出用 `pow(1/2.2)`，Web 用 Three.js `SRGBColorSpace`（真正 sRGB EOTF），mid-tone 差 1–5%。暂可接受。
+- **钢琴场景**未在 `no_normal` 数据源下验证（`piano_pbr.zip` 还是 `_pbr` 版本）。
+- **调试代码**（`pbr.frag` 28 个 debug 通道、HUD）待 specular LOD 修好后清理。
