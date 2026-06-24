@@ -1,10 +1,11 @@
 """Smoke test: verify all shader models on all scenes.
 
 2 scenes (helmet, piano) × 3 models (SH, PBR, NLM) = 6 combos.
-Minimal 3-epoch training at 128px, checkpoint at last epoch, output to
+Minimal 5-epoch training at 128px, checkpoint at last epoch, output to
 output/smoke_{scene}_{model}/ — never touches existing output/ dirs.
 """
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -38,21 +39,28 @@ def run_one(scene: str, model: str, config_path: str) -> str:
     cfg = load_config(config_path)
     assert cfg.render_mode == model, f"render_mode mismatch: {cfg.render_mode} vs {model}"
 
-    # Minimal training
-    cfg.training.num_epochs = 3
+    # Minimal training (50 epochs, 128px)
+    cfg.training.num_epochs = 50
     cfg.training.lr_decay_epochs = []
     cfg.training.resolution_schedule = [ResolutionStep(epoch=0, resolution=128)]
     cfg.texture.base_resolution = 128
     cfg.texture.target_resolution = 128
 
+    # Copy config to output for traceability
+    shutil.copy(config_path, output_dir / "config.yaml")
+    (output_dir / "config_overrides.txt").write_text(
+        "num_epochs: 50\nresolution: 128\nlr_decay_epochs: []\n"
+    )
+    cfg.texture.target_resolution = 128
+
     t0 = time.time()
     trainer = Trainer(cfg)
     # trainer creates epochNNNN/ subdir inside output_dir automatically
-    trainer.train(output_dir=str(output_dir), checkpoint_every=3)
+    trainer.train(output_dir=str(output_dir), checkpoint_every=50)
     elapsed = time.time() - t0
 
-    # Verify checkpoint (trainer creates epoch0003/ inside output_dir)
-    actual_ep = output_dir / "epoch0003"
+    # Verify checkpoint (trainer creates epoch50/ inside output_dir)
+    actual_ep = output_dir / "epoch50"
     ckpt_files = list(actual_ep.glob("*")) if actual_ep.exists() else []
     ckpt_names = [f.name for f in ckpt_files]
     has_checkpoint = any("checkpoint" in n.lower() or "compare" in n.lower() for n in ckpt_names)

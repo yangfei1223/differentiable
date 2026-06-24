@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -67,6 +68,8 @@ def main():
         model = create_shading_model(cfg.render_mode, cfg)
         trainer = Trainer(cfg, shading_model=model)
         output_base.mkdir(parents=True, exist_ok=True)
+        # 拷贝配置文件到输出目录，便于追踪每个日志对应的训练参数
+        shutil.copy(args.config, output_base / "config.yaml")
         trainer.train(
             output_dir=str(output_base),
             checkpoint_every=200,
