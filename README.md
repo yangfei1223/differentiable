@@ -95,8 +95,20 @@
 │           └── tiny_mlp.py           # TinyMLP 解码器 (Softplus HDR)
 ├── scripts/
 │   ├── blender_export.py      # Blender 数据导出脚本
+│   ├── package_runtime_asset.py  # Web Viewer 资产打包
 │   ├── run_ablation.py        # SH0 vs SH2 对照实验
+│   ├── smoke_test.py          # 6-way 训练管线烟雾测试
 │   └── README.md              # 数据制备 SOP
+├── app/                        # Web Viewer (WebGL2 运行时验证)
+│   ├── README.md              # Viewer 独有文档
+│   ├── src/                   # TypeScript 源码
+│   │   ├── app/               # 应用编排
+│   │   ├── render/            # PBR 渲染管线 + 环境贴图加载
+│   │   ├── shaders/           # GLSL 着色器 (镜像 Python PBR 数学)
+│   │   ├── ui/                # 界面组件 (相机面板/场景选择)
+│   │   └── types/             # manifest TS 类型
+│   ├── reports/               # AB 验证报告 (中文化)
+│   └── resource/              # 报告图片资源
 ├── configs/
 │   ├── default.yaml           # 默认配置 (SH order 2)
 │   ├── train_sh0.yaml         # SH order 0
@@ -242,6 +254,8 @@ python main.py --config configs/train_nlm_piano_multi_large.yaml --mode train --
 python main.py --config configs/train_pbr.yaml --mode train --resume output/{dataset}/checkpoint.pt
 ```
 
+> 训练启动时会自动拷贝配置文件到输出目录 (`config.yaml`)，便于追踪每个日志对应的训练参数。
+
 ## 导出 & 视频
 
 ```bash
@@ -255,7 +269,11 @@ python main.py --mode video --checkpoint output/{dataset}/checkpoint.pt
 ## 测试
 
 ```bash
+# 完整测试套件
 pytest tests/ -v
+
+# 快速烟雾测试（6-way, 50 epoch, 128px, 2-3 分钟）
+python scripts/smoke_test.py
 ```
 
 ## 技术栈
@@ -266,7 +284,14 @@ pytest tests/ -v
 
 ## 更新日志
 
-### v0.4 (2026-06-17) — Neural Lightmap 着色模型
+### v0.5 (2026-06-24) — Web Viewer 运行时验证 + 管线完善
+
+- **WebGL2 PBR Viewer**：加载训练输出资产包，GLSL 着色器严格镜像 Python `pbr_model.py` 数学。支持 Web 端环境贴图 HDR 解码、split-sum PBR 着色、debug 通道可视化
+- **PBR Web Viewer 修复**：irradiance mip 选择 (textureLod max_mip)、UV flipY 按场景自动检测、DoubleSide 匹配 nvdiffrast 无背面剔除、深嵌套 node 层级 mesh 名解析
+- **helmet + piano AB 验证**：`no_normal` 训练数据源端点对比，piano 最高 PSNR 25.99 dB。两份中文报告在 `app/reports/`
+- **实时相机面板**：浏览器端 Blender Z-up 坐标实时显示 + URL hash 点击复制，便于截图后精确定位
+- **配置自动归档**：训练启动时自动拷贝 YAML 配置到输出目录，便于追踪日志对应的训练参数
+- **6-way 烟雾测试**：`scripts/smoke_test.py` 覆盖 helmet/piano × SH/PBR/NLM，50 epoch 快速验证训练管线完整性
 
 - **NLM 着色模型**：per-submesh 可学习特征图 + 共享 TinyMLP 解码器，Softplus HDR 输出
 - **反射方向编码**：PE(R) 高频位置编码 + NdotV Fresnel 标量，建模视角相关镜面反射
