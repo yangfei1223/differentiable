@@ -350,6 +350,8 @@ python -m scripts.package_runtime_asset \
 
 # 启动 Viewer
 cd app && npm install && npm run dev
+
+# 或直接双击项目根目录的 start_viewer.bat（自动检查依赖 + 启动）
 ```
 
 详细文档见 `app/README.md` 和各场景的 AB 验证报告（`app/reports/`）。
