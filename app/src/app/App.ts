@@ -1,6 +1,7 @@
 import { PBRPipeline } from '../render/PBRPipeline';
 import { CameraControls } from '../ui/CameraControls';
 import { PerfStats } from '../ui/PerfStats';
+import { CameraInfo } from '../ui/CameraInfo';
 import { LoadingOverlay } from '../ui/LoadingOverlay';
 import { ScenePicker } from '../ui/ScenePicker';
 import { SceneLoader, type AssetBundle } from './SceneLoader';
@@ -12,6 +13,7 @@ export class App {
   private readonly pipeline: PBRPipeline;
   private readonly cameraControls: CameraControls;
   private readonly perfStats: PerfStats;
+  private readonly cameraInfo: CameraInfo;
   private readonly loading: LoadingOverlay;
   private readonly scenePicker: ScenePicker;
   private readonly container: HTMLElement;
@@ -95,7 +97,13 @@ export class App {
     });
 
     // UI overlays
-    this.perfStats = new PerfStats(container);
+    // Right-top overlay stack: perf stats + camera info share one anchor
+    const overlayStack = document.createElement('div');
+    overlayStack.className = 'viewer-overlay-stack';
+    container.appendChild(overlayStack);
+
+    this.perfStats = new PerfStats(overlayStack);
+    this.cameraInfo = new CameraInfo(overlayStack);
     this.loading = new LoadingOverlay(container);
     this.loading.show();
 
@@ -177,6 +185,7 @@ export class App {
     this.cameraControls.update();
     this.pipeline.render();
     this.perfStats.onFrame(this.pipeline.renderer);
+    this.cameraInfo.onFrame(this.pipeline.camera, this.cameraControls.controls.target);
   };
 
   /**
@@ -269,6 +278,7 @@ export class App {
     if (this.currentBundle) SceneLoader.dispose(this.currentBundle);
     this.cameraControls.dispose();
     this.perfStats.dispose();
+    this.cameraInfo.dispose();
     this.loading.dispose();
     this.scenePicker.dispose();
     this.pipeline.dispose();
