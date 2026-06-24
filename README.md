@@ -293,6 +293,8 @@ python scripts/smoke_test.py
 - **配置自动归档**：训练启动时自动拷贝 YAML 配置到输出目录，便于追踪日志对应的训练参数
 - **6-way 烟雾测试**：`scripts/smoke_test.py` 覆盖 helmet/piano × SH/PBR/NLM，50 epoch 快速验证训练管线完整性
 
+### v0.4 (2026-06-17) — Neural Lightmap 着色模型
+
 - **NLM 着色模型**：per-submesh 可学习特征图 + 共享 TinyMLP 解码器，Softplus HDR 输出
 - **反射方向编码**：PE(R) 高频位置编码 + NdotV Fresnel 标量，建模视角相关镜面反射
 - **TTUR 双学习率**：特征图 0.1 / MLP 0.001，解决局部梯度 vs 全局梯度的更新速度差异
@@ -334,23 +336,23 @@ python scripts/smoke_test.py
 - UV Seam Padding 自动膨胀
 - Fibonnaci 半球采样相机生成 + Cycles GT 渲染
 
-## Web Viewer (Runtime Validation)
+## Web Viewer（运行时验证）
 
-A WebGL2 viewer is available in `app/` for validating PBR baking outputs in a browser environment. It loads asset bundles produced by `scripts/package_runtime_asset.py` and renders them with GLSL shaders that strictly mirror the training-time PBR math.
+`app/` 目录包含一个 WebGL2 浏览器端 Viewer，用于在浏览器中验证 PBR 烘焙输出。加载 `scripts/package_runtime_asset.py` 打包的 `.zip` 资产包，用与 Python `pbr_model.py` 严格等价的 GLSL 着色器渲染。
 
 ```bash
-# Pack a training output
+# 从训练输出打包资产
 python -m scripts.package_runtime_asset \
   --glb data/helmet_260604/scene/lowpoly.glb \
   --epoch-dir output/helmet_260604_pbr/epoch2000 \
   --scene-name helmet \
   --psnr 20.81
 
-# Run the viewer
+# 启动 Viewer
 cd app && npm install && npm run dev
 ```
 
-See `app/README.md` for details.
+详细文档见 `app/README.md` 和各场景的 AB 验证报告（`app/reports/`）。
 
 ## License
 
